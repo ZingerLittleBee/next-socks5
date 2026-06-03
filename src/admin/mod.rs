@@ -14,6 +14,8 @@ pub use server::serve;
 
 mod client;
 pub use client::{decode_loop, RemoteState};
+#[cfg(feature = "tui")]
+pub use client::attach;
 
 /// Wire protocol version. Bump on any breaking change to `Frame`.
 pub const PROTO_VERSION: u16 = 1;

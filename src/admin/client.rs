@@ -74,6 +74,72 @@ pub async fn decode_loop<R: AsyncReadExt + Unpin>(
     }
 }
 
+/// Connect to `socket_path`, validate the handshake, then run the TUI fed by
+/// the decoded remote stream. Prints "connection lost" to stderr (after the
+/// terminal is restored) if the stream ends unexpectedly.
+#[cfg(feature = "tui")]
+pub async fn attach(socket_path: &std::path::Path) -> std::io::Result<()> {
+    use tokio::net::UnixStream;
+
+    let mut stream = match UnixStream::connect(socket_path).await {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!(
+                "未找到运行中的服务（socket: {}）：{e}\n服务在运行吗？",
+                socket_path.display()
+            );
+            std::process::exit(1);
+        }
+    };
+
+    // First frame must be Hello; validate protocol version.
+    let listen_addr = match read_frame(&mut stream).await {
+        Ok(Frame::Hello { proto, listen_addr }) => {
+            if proto != super::PROTO_VERSION {
+                eprintln!(
+                    "协议版本不匹配：服务端 {proto}，本客户端 {}。请使用同版本的 next-socks5。",
+                    super::PROTO_VERSION
+                );
+                std::process::exit(1);
+            }
+            listen_addr
+        }
+        Ok(other) => {
+            eprintln!("协议错误：期望 Hello，收到 {other:?}");
+            std::process::exit(1);
+        }
+        Err(e) => {
+            eprintln!("读取握手失败：{e}");
+            std::process::exit(1);
+        }
+    };
+
+    let state = RemoteState::new();
+    let (ev_tx, ev_rx) = broadcast::channel::<Event>(1024);
+    let (sd_tx, sd_rx) = watch::channel(false);
+    let lost = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+    // Decode task reads the rest of the stream.
+    let (reader, _writer) = stream.into_split();
+    let decode = tokio::spawn(decode_loop(
+        reader,
+        state.clone(),
+        ev_tx,
+        sd_tx.clone(),
+        lost.clone(),
+    ));
+
+    let source: Arc<dyn MetricsSource> = state;
+    let res = crate::tui::run(source, ev_rx, sd_tx, sd_rx, listen_addr).await;
+
+    decode.abort();
+    // Terminal is restored by tui::run's guard before we return; print here.
+    if lost.load(std::sync::atomic::Ordering::SeqCst) {
+        eprintln!("connection lost");
+    }
+    res
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

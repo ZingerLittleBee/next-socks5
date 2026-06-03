@@ -12,7 +12,8 @@ use tokio::net::TcpListener;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::{broadcast, watch};
 
-use next_socks5::config::{AuthMethod, Cli, Config};
+use next_socks5::admin;
+use next_socks5::config::{AuthMethod, Cli, Command, Config, DEFAULT_ADMIN_SOCKET};
 use next_socks5::metrics::{format_event, Event, Metrics};
 use next_socks5::server;
 #[cfg(feature = "tui")]
@@ -25,6 +26,25 @@ const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
 async fn main() {
     // 1. Parse CLI and load config; a config error is fatal.
     let cli = Cli::parse();
+
+    // Attach subcommand: connect to a running server, render its dashboard.
+    #[cfg(feature = "tui")]
+    if let Some(Command::Attach { socket }) = &cli.command {
+        let path = socket
+            .clone()
+            .unwrap_or_else(|| std::path::PathBuf::from(DEFAULT_ADMIN_SOCKET));
+        if let Err(e) = admin::attach(&path).await {
+            eprintln!("attach error: {e}");
+            std::process::exit(1);
+        }
+        return;
+    }
+    #[cfg(not(feature = "tui"))]
+    if matches!(cli.command, Some(Command::Attach { .. })) {
+        eprintln!("attach 需要启用 tui feature 的构建");
+        std::process::exit(1);
+    }
+
     let cfg = match Config::load(&cli) {
         Ok(c) => Arc::new(c),
         Err(e) => {
@@ -64,6 +84,36 @@ async fn main() {
         events_tx.clone(),
         shutdown_rx.clone(),
     ));
+
+    // 4b. Start the admin/attach endpoint unless disabled. Failures here are
+    //     non-fatal: attach is an auxiliary capability, not the proxy itself.
+    if cfg.admin.enabled {
+        let sock = cfg
+            .admin
+            .socket
+            .clone()
+            .unwrap_or_else(|| DEFAULT_ADMIN_SOCKET.to_string());
+        let ring = admin::EventRing::new();
+        ring.spawn_filler(events_tx.subscribe());
+        let source: Arc<dyn next_socks5::metrics::MetricsSource> = metrics.clone();
+        let events_tx2 = events_tx.clone();
+        let shutdown_admin = shutdown_rx.clone();
+        let listen_for_admin = Some(listen_str.clone());
+        tokio::spawn(async move {
+            if let Err(e) = admin::serve(
+                std::path::Path::new(&sock),
+                source,
+                events_tx2,
+                ring,
+                shutdown_admin,
+                listen_for_admin,
+            )
+            .await
+            {
+                eprintln!("admin endpoint disabled: {e}");
+            }
+        });
+    }
 
     // 5. Run the chosen front end. Each branch is responsible for flipping the
     //    shutdown channel to `true` before returning.

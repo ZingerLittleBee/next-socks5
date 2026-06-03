@@ -68,3 +68,65 @@ async fn attach_receives_hello_replay_and_stats() {
     let _ = server.await;
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[tokio::test]
+async fn end_to_end_remote_state_updates() {
+    use next_socks5::admin::RemoteState;
+    use next_socks5::metrics::MetricsSource;
+    use std::sync::atomic::AtomicBool;
+
+    let dir = std::env::temp_dir().join(format!("ns5-e2e-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let sock = dir.join("admin.sock");
+
+    let metrics = Metrics::new();
+    metrics.register(
+        "127.0.0.1:6000".parse().unwrap(),
+        "h:80".into(),
+        ConnKind::Connect,
+    );
+    let (events_tx, _rx) = broadcast::channel::<Event>(64);
+    let ring = EventRing::new();
+    let (sd_tx, sd_rx) = watch::channel(false);
+
+    let source: Arc<dyn MetricsSource> = metrics.clone();
+    let sock2 = sock.clone();
+    let server = tokio::spawn(async move {
+        serve(&sock2, source, events_tx, ring, sd_rx, None)
+            .await
+            .unwrap();
+    });
+
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let stream = UnixStream::connect(&sock).await.unwrap();
+    let (reader, _w) = stream.into_split();
+
+    // decode_loop ignores the leading Hello frame, so no manual skip needed.
+    let state = RemoteState::new();
+    let (ev_tx, _evrx) = broadcast::channel(64);
+    let (dsd_tx, _dsd_rx) = watch::channel(false);
+    let lost = Arc::new(AtomicBool::new(false));
+    let decode = tokio::spawn(next_socks5::admin::decode_loop(
+        reader,
+        state.clone(),
+        ev_tx,
+        dsd_tx,
+        lost,
+    ));
+
+    // Within a few ticks the first Stats frame updates the remote state.
+    let mut ok = false;
+    for _ in 0..20 {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        if state.snapshot().total_conns == 1 {
+            ok = true;
+            break;
+        }
+    }
+    assert!(ok, "remote state should reflect server stats");
+
+    decode.abort();
+    sd_tx.send(true).unwrap();
+    let _ = server.await;
+    let _ = std::fs::remove_dir_all(&dir);
+}
