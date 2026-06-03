@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
-use ratatui::text::Line;
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Cell, List, ListItem, Paragraph, Row, Sparkline, Table};
 use ratatui::Frame;
 
@@ -148,12 +148,27 @@ impl RateHistory {
     pub fn samples(&self) -> Vec<u64> {
         self.buf.iter().copied().collect()
     }
+
+    /// Highest sample currently retained (0 when empty).
+    pub fn peak(&self) -> u64 {
+        self.buf.iter().copied().max().unwrap_or(0)
+    }
 }
 
 /// Format a duration as `H:MM:SS` (hours uncapped), used for uptime.
 pub fn fmt_hms(d: Duration) -> String {
     let s = d.as_secs();
     format!("{}:{:02}:{:02}", s / 3600, (s % 3600) / 60, s % 60)
+}
+
+/// Success percentage of completed requests, e.g. `98.2%`; `--` when none yet.
+pub fn fmt_pct(ok: u64, fail: u64) -> String {
+    let total = ok + fail;
+    if total == 0 {
+        "--".to_string()
+    } else {
+        format!("{:.1}%", ok as f64 * 100.0 / total as f64)
+    }
 }
 
 /// Format a connection age compactly for the narrow table column:
@@ -195,7 +210,7 @@ pub fn render(frame: &mut Frame, state: &super::DashboardState) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1), // title bar
-            Constraint::Length(6), // rate panel (text + sparklines)
+            Constraint::Length(9), // rate panel (text + sparklines)
             Constraint::Min(6),    // connections table
             Constraint::Length(6), // stats panel
             Constraint::Min(5),    // log panel
@@ -246,6 +261,12 @@ fn render_rate(frame: &mut Frame, area: Rect, state: &super::DashboardState) {
             state.down_kbps,
             human_bytes(snap.bytes_down)
         )),
+        Line::from(format!(
+            "peak  ↑{} ↓{} KB/s",
+            state.up_history.peak(),
+            state.down_history.peak()
+        ))
+        .style(Style::default().fg(Color::DarkGray)),
     ];
     let block = Block::default().borders(Borders::ALL).title("Throughput");
     frame.render_widget(Paragraph::new(text).block(block), cols[0]);
@@ -349,17 +370,29 @@ fn render_stats(frame: &mut Frame, area: Rect, state: &super::DashboardState) {
         "badcmd",
         "badatyp",
     ];
-    let codes: Vec<String> = (1..=8)
-        .map(|i| format!("0x{:02x} {}={}", i, CODE_NAMES[i - 1], snap.error_codes[i]))
-        .collect();
+    // One span per error code; zero buckets are dimmed so non-zero ones pop.
+    let code_span = |i: usize| -> Span {
+        let count = snap.error_codes[i];
+        let s = format!("0x{:02x} {}={}   ", i, CODE_NAMES[i - 1], count);
+        let style = if count > 0 {
+            Style::default().fg(Color::Yellow)
+        } else {
+            Style::default().fg(Color::DarkGray)
+        };
+        Span::styled(s, style)
+    };
 
     let text = vec![
         Line::from(format!(
-            "conns total={}  active={}  ok={}  fail={}",
-            snap.total_conns, snap.active_conns, snap.successes, snap.failures
+            "conns total={}  active={}  ok={}  fail={}  ({})",
+            snap.total_conns,
+            snap.active_conns,
+            snap.successes,
+            snap.failures,
+            fmt_pct(snap.successes, snap.failures),
         )),
-        Line::from(codes[0..4].join("   ")),
-        Line::from(codes[4..8].join("   ")),
+        Line::from((1..=4).map(code_span).collect::<Vec<Span>>()),
+        Line::from((5..=8).map(code_span).collect::<Vec<Span>>()),
     ];
     let block = Block::default().borders(Borders::ALL).title("Stats");
     frame.render_widget(Paragraph::new(text).block(block), area);
@@ -467,6 +500,23 @@ mod tests {
         assert_eq!(fmt_hms(Duration::from_secs(0)), "0:00:00");
         assert_eq!(fmt_hms(Duration::from_secs(75)), "0:01:15");
         assert_eq!(fmt_hms(Duration::from_secs(3661)), "1:01:01");
+    }
+
+    #[test]
+    fn rate_history_peak_tracks_max() {
+        let mut h = RateHistory::new(5);
+        assert_eq!(h.peak(), 0);
+        for v in [3, 9, 1, 4] {
+            h.push(v);
+        }
+        assert_eq!(h.peak(), 9);
+    }
+
+    #[test]
+    fn fmt_pct_handles_zero_and_ratio() {
+        assert_eq!(fmt_pct(0, 0), "--");
+        assert_eq!(fmt_pct(99, 1), "99.0%");
+        assert_eq!(fmt_pct(1, 1), "50.0%");
     }
 
     #[test]
