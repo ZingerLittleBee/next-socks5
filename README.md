@@ -206,27 +206,39 @@ The terminal dashboard is on by default — just run the server without
 next-socks5 --listen 127.0.0.1:1080
 ```
 
-### Remote dashboard (attach)
+### Attach to a running service
 
-When the server runs headless (systemd / OpenRC / container), it still serves a
-live dashboard over a local Unix socket (default
-`/run/next-socks5/admin.sock`). From the same machine — typically over SSH into
-the VPS — attach to it to watch real-time throughput, connections, and events:
+A service installed via systemd / OpenRC / Docker runs **headless** (no UI of
+its own), but it still serves the live dashboard over a local Unix socket
+(default `/run/next-socks5/admin.sock`). To watch a server that is **already
+running**, attach to it from the same machine — there is nothing to restart and
+no flag to enable; the endpoint is on by default.
 
 ```bash
-# Same machine, default socket:
+# 1. SSH into the host where the service runs (as root for the default socket):
+ssh root@your-server
+
+# 2. Attach — default socket /run/next-socks5/admin.sock:
 next-socks5 attach
 
-# Custom socket path:
-next-socks5 attach --socket /tmp/ns5.sock
-
-# Docker deployment:
+# Docker: run attach inside the container instead:
 docker exec -it next-socks5 next-socks5 attach
+```
+
+If the service uses a non-default socket path (e.g. a manual install on a custom
+path), point `--socket` at it:
+
+```bash
+next-socks5 attach --socket /tmp/ns5.sock
 ```
 
 The endpoint is local-only (no network exposure, no auth) and read-only — attach
 clients observe but cannot control the server. Press `q` to detach; if the
 server stops, the dashboard exits with `connection lost`.
+
+> The default socket lives under `/run/next-socks5` (mode `0710`, owned by the
+> service user). `root` can always attach; a non-root user can only attach to a
+> socket it owns (e.g. a manual install under `/tmp` or `$XDG_RUNTIME_DIR`).
 
 Disable the endpoint with `--no-admin` or `[admin] enabled = false`.
 
