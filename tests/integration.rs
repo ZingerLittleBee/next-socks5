@@ -447,6 +447,64 @@ async fn connect_half_close_receives_full_response() {
 }
 
 #[tokio::test]
+async fn unknown_command_replies_0x07() {
+    let scenario = async {
+        let proxy_addr = start_server_with_config(no_auth_config()).await;
+
+        let mut client = TcpStream::connect(proxy_addr).await.unwrap();
+
+        // No-auth handshake.
+        client.write_all(&[0x05, 0x01, 0x00]).await.unwrap();
+        let mut method_reply = [0u8; 2];
+        client.read_exact(&mut method_reply).await.unwrap();
+        assert_eq!(method_reply, [0x05, 0x00]);
+
+        // Request with an unrecognized command byte (0x09) and a valid IPv4 addr.
+        client
+            .write_all(&[0x05, 0x09, 0x00, 0x01, 127, 0, 0, 1, 0x00, 0x50])
+            .await
+            .unwrap();
+        let mut reply = [0u8; 10];
+        client.read_exact(&mut reply).await.unwrap();
+        assert_eq!(reply[0], 0x05);
+        assert_eq!(reply[1], 0x07, "expected command not supported (0x07)");
+    };
+
+    tokio::time::timeout(Duration::from_secs(5), scenario)
+        .await
+        .expect("unknown command scenario timed out");
+}
+
+#[tokio::test]
+async fn unknown_atype_replies_0x08() {
+    let scenario = async {
+        let proxy_addr = start_server_with_config(no_auth_config()).await;
+
+        let mut client = TcpStream::connect(proxy_addr).await.unwrap();
+
+        // No-auth handshake.
+        client.write_all(&[0x05, 0x01, 0x00]).await.unwrap();
+        let mut method_reply = [0u8; 2];
+        client.read_exact(&mut method_reply).await.unwrap();
+        assert_eq!(method_reply, [0x05, 0x00]);
+
+        // Request with CONNECT but an unknown ATYP (0x09) plus filler bytes.
+        client
+            .write_all(&[0x05, 0x01, 0x00, 0x09, 0x00, 0x00])
+            .await
+            .unwrap();
+        let mut reply = [0u8; 10];
+        client.read_exact(&mut reply).await.unwrap();
+        assert_eq!(reply[0], 0x05);
+        assert_eq!(reply[1], 0x08, "expected address type not supported (0x08)");
+    };
+
+    tokio::time::timeout(Duration::from_secs(5), scenario)
+        .await
+        .expect("unknown atype scenario timed out");
+}
+
+#[tokio::test]
 async fn bind_command_not_supported() {
     let scenario = async {
         let proxy_addr = start_server_with_config(no_auth_config()).await;

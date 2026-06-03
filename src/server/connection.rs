@@ -11,13 +11,13 @@ use tokio::sync::{broadcast, watch};
 use crate::config::{AuthMethod, Config};
 use crate::error::Socks5Error;
 use crate::metrics::{Event, Metrics};
-use crate::protocol::address::Address;
+use crate::protocol::address::{AddrError, Address};
 use crate::protocol::handshake::{
     method_reply, parse_greeting, parse_userpass, select_method, userpass_reply, HandshakeError,
     METHOD_NONE_ACCEPTABLE, METHOD_USERPASS,
 };
 use crate::protocol::reply::encode_reply;
-use crate::protocol::request::{parse_request, Command};
+use crate::protocol::request::{parse_request, Command, Request, RequestError};
 
 use super::connect;
 
@@ -86,22 +86,18 @@ pub async fn handle(
     }
 
     // 3. SOCKS request.
-    let request = match read_message(&mut stream, |b| match parse_request(b) {
-        Ok(req) => Ok(Some(req)),
-        // A short read is retried; any other parse error is fatal.
-        Err(crate::protocol::request::RequestError::Truncated) => Ok(None),
-        Err(_) => Err(()),
-    })
-    .await
-    {
-        Some(req) => req,
-        None => {
-            // Malformed request: best-effort general-failure reply, then close.
-            reply_failure(&mut stream, Socks5Error::General).await;
-            let _ = events.send(Event::Error {
-                code: Socks5Error::General.reply_code(),
-                msg: "malformed request".to_string(),
-            });
+    let request = match read_request(&mut stream).await {
+        Ok(req) => req,
+        Err(maybe_code) => {
+            // A precise reply code (when known) is sent before closing; some
+            // failures (EOF/IO/overflow/bad version) have no SOCKS reply.
+            if let Some(code) = maybe_code {
+                reply_failure(&mut stream, code.clone()).await;
+                let _ = events.send(Event::Error {
+                    code: code.reply_code(),
+                    msg: "malformed request".to_string(),
+                });
+            }
             return;
         }
     };
@@ -163,6 +159,48 @@ where
             Ok(0) => return None,
             Ok(n) => buf.extend_from_slice(&chunk[..n]),
             Err(_) => return None,
+        }
+    }
+}
+
+/// Read and parse a SOCKS5 request, reassembling across multiple TCP reads.
+///
+/// On success returns the parsed [`Request`]. On failure returns the SOCKS5
+/// reply code that should be sent to the client before closing, or `None` when
+/// the connection should simply be closed with no reply (EOF, IO error, buffer
+/// overflow, or a bad protocol version that has no defined reply code).
+///
+/// Truncation — whether of the fixed header ([`RequestError::Truncated`]) or of
+/// the address bytes ([`AddrError::Truncated`]) — means "need more bytes", so we
+/// keep reading instead of treating it as fatal.
+async fn read_request(stream: &mut TcpStream) -> Result<Request, Option<Socks5Error>> {
+    let mut buf = Vec::with_capacity(READ_BUF);
+    let mut chunk = [0u8; READ_BUF];
+    loop {
+        match parse_request(&buf) {
+            Ok(req) => return Ok(req),
+            // Both truncation cases need more bytes; keep reading.
+            Err(RequestError::Truncated) | Err(RequestError::Addr(AddrError::Truncated)) => {}
+            // Unrecognized command byte: command not supported.
+            Err(RequestError::BadCommand(_)) => return Err(Some(Socks5Error::CommandNotSupported)),
+            // Unknown ATYP: address type not supported.
+            Err(RequestError::Addr(AddrError::BadAtyp(_))) => {
+                return Err(Some(Socks5Error::AddressNotSupported))
+            }
+            // Malformed domain is a generic failure, not an unsupported ATYP.
+            Err(RequestError::Addr(AddrError::BadDomain)) => {
+                return Err(Some(Socks5Error::General))
+            }
+            // Bad version has no well-defined SOCKS reply; close the connection.
+            Err(RequestError::BadVersion(_)) => return Err(None),
+        }
+        if buf.len() > READ_BUF {
+            return Err(None);
+        }
+        match stream.read(&mut chunk).await {
+            Ok(0) => return Err(None),
+            Ok(n) => buf.extend_from_slice(&chunk[..n]),
+            Err(_) => return Err(None),
         }
     }
 }
