@@ -375,9 +375,11 @@ pub fn render(frame: &mut Frame, state: &super::DashboardState) {
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(37), Constraint::Percentage(63)])
         .split(chunks[1]);
+    // Throughput needs 3 lines (5 rows incl. borders); Stats now has 6 lines
+    // (conns, three error-code rows of three, top-error), needing 8 rows.
     let left = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(6), Constraint::Min(5)])
+        .constraints([Constraint::Length(5), Constraint::Min(8)])
         .split(band[0]);
     render_throughput(frame, left[0], state);
     render_stats(frame, left[1], state);
@@ -631,8 +633,9 @@ fn render_stats(frame: &mut Frame, area: Rect, state: &super::DashboardState) {
             snap.failures,
             fmt_pct(snap.successes, snap.failures),
         )),
-        Line::from((1..=4).map(code_span).collect::<Vec<Span>>()),
-        Line::from((5..=8).map(code_span).collect::<Vec<Span>>()),
+        Line::from((1..=3).map(code_span).collect::<Vec<Span>>()),
+        Line::from((4..=6).map(code_span).collect::<Vec<Span>>()),
+        Line::from((7..=8).map(code_span).collect::<Vec<Span>>()),
         top_line,
     ];
     let block = Block::default().borders(Borders::ALL).title("Stats");
