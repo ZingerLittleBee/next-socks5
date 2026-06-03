@@ -7,20 +7,21 @@
 //! because they are independent statistics that need no cross-counter ordering;
 //! the per-connection registry is guarded by a [`Mutex`].
 
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 /// Kind of proxied connection.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ConnKind {
     Connect,
     Udp,
 }
 
 /// Per-connection bookkeeping stored in the registry.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConnInfo {
     pub id: u64,
     pub src: SocketAddr,
@@ -31,7 +32,7 @@ pub struct ConnInfo {
 }
 
 /// A point-in-time copy of the global counters for the TUI to sample.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Snapshot {
     pub bytes_up: u64,
     pub bytes_down: u64,
@@ -43,7 +44,7 @@ pub struct Snapshot {
 }
 
 /// Log/lifecycle events delivered to the TUI log panel or stdout (headless).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum Event {
     Connect {
         id: u64,
@@ -308,5 +309,35 @@ mod tests {
         });
         assert!(s.contains("alice"));
         assert!(s.contains("fail") || s.contains("denied"));
+    }
+
+    #[test]
+    fn event_postcard_round_trip() {
+        let ev = Event::Connect {
+            id: 7,
+            src: addr(),
+            target: "example.com:443".into(),
+            kind: ConnKind::Udp,
+        };
+        let bytes = postcard::to_allocvec(&ev).expect("encode");
+        let back: Event = postcard::from_bytes(&bytes).expect("decode");
+        assert_eq!(format_event(&ev), format_event(&back));
+    }
+
+    #[test]
+    fn snapshot_postcard_round_trip() {
+        let snap = Snapshot {
+            bytes_up: 1,
+            bytes_down: 2,
+            total_conns: 3,
+            active_conns: 4,
+            successes: 5,
+            failures: 6,
+            error_codes: [1, 0, 0, 0, 0, 0, 0, 0, 2],
+        };
+        let bytes = postcard::to_allocvec(&snap).expect("encode");
+        let back: Snapshot = postcard::from_bytes(&bytes).expect("decode");
+        assert_eq!(snap.bytes_up, back.bytes_up);
+        assert_eq!(snap.error_codes, back.error_codes);
     }
 }
