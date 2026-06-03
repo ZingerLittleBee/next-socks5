@@ -23,7 +23,37 @@ pub struct Config {
     /// Advertised BND address for UDP ASSOCIATE replies (optional).
     #[serde(default)]
     pub public_addr: Option<String>,
+    /// Admin/attach endpoint settings.
+    #[serde(default)]
+    pub admin: AdminConfig,
 }
+
+/// Admin/attach (local Unix socket) configuration.
+#[derive(Debug, Clone, serde::Deserialize, PartialEq, Eq)]
+pub struct AdminConfig {
+    /// Whether the admin endpoint is enabled (default true).
+    #[serde(default = "default_true")]
+    pub enabled: bool,
+    /// Override the admin socket path (default `/run/next-socks5/admin.sock`).
+    #[serde(default)]
+    pub socket: Option<String>,
+}
+
+impl Default for AdminConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            socket: None,
+        }
+    }
+}
+
+fn default_true() -> bool {
+    true
+}
+
+/// Default admin socket path when none configured.
+pub const DEFAULT_ADMIN_SOCKET: &str = "/run/next-socks5/admin.sock";
 
 /// Authentication configuration.
 #[derive(Debug, Clone, serde::Deserialize, PartialEq, Eq, Default)]
@@ -89,6 +119,9 @@ pub struct Limits {
 #[derive(Debug, clap::Parser)]
 #[command(name = "next-socks5", about = "A lightweight SOCKS5 server")]
 pub struct Cli {
+    /// Subcommand. With no subcommand, the server runs (default).
+    #[command(subcommand)]
+    pub command: Option<Command>,
     /// Path to a TOML configuration file.
     #[arg(long)]
     pub config: Option<PathBuf>,
@@ -98,6 +131,26 @@ pub struct Cli {
     /// Disable the terminal UI.
     #[arg(long)]
     pub no_tui: bool,
+    /// Disable the local admin/attach endpoint.
+    #[arg(long)]
+    pub no_admin: bool,
+    /// Override the admin socket path.
+    #[arg(long)]
+    pub admin_socket: Option<PathBuf>,
+    /// Feed the dashboard with synthetic data (demo only; no real traffic).
+    #[arg(long, hide = true)]
+    pub mock: bool,
+}
+
+/// Subcommands. With no subcommand, the server runs (default).
+#[derive(Debug, clap::Subcommand)]
+pub enum Command {
+    /// Attach to a running server and show its dashboard.
+    Attach {
+        /// Path to the admin socket to connect to.
+        #[arg(long)]
+        socket: Option<PathBuf>,
+    },
 }
 
 /// Errors that can occur while loading configuration.
@@ -142,6 +195,7 @@ impl Config {
             timeouts: Timeouts::default(),
             limits: Limits::default(),
             public_addr: None,
+            admin: AdminConfig::default(),
         }
     }
 }
@@ -153,6 +207,12 @@ impl Config {
 fn apply_overrides(cfg: &mut Config, cli: &Cli) {
     if let Some(listen) = &cli.listen {
         cfg.listen = listen.clone();
+    }
+    if cli.no_admin {
+        cfg.admin.enabled = false;
+    }
+    if let Some(sock) = &cli.admin_socket {
+        cfg.admin.socket = Some(sock.to_string_lossy().into_owned());
     }
 }
 
@@ -211,9 +271,13 @@ max_connections = 1024
     fn cli_listen_override_replaces_listen() {
         let mut cfg = Config::from_toml_str(EXAMPLE_CONFIG).expect("should parse");
         let cli = Cli {
+            command: None,
             config: None,
             listen: Some("0.0.0.0:9999".to_string()),
             no_tui: false,
+            no_admin: false,
+            admin_socket: None,
+            mock: false,
         };
         apply_overrides(&mut cfg, &cli);
         assert_eq!(cfg.listen, "0.0.0.0:9999");
@@ -223,12 +287,50 @@ max_connections = 1024
     fn cli_override_absent_keeps_listen() {
         let mut cfg = Config::from_toml_str(EXAMPLE_CONFIG).expect("should parse");
         let cli = Cli {
+            command: None,
             config: None,
             listen: None,
             no_tui: false,
+            no_admin: false,
+            admin_socket: None,
+            mock: false,
         };
         apply_overrides(&mut cfg, &cli);
         assert_eq!(cfg.listen, "127.0.0.1:1080");
+    }
+
+    #[test]
+    fn parses_admin_config() {
+        let cfg = Config::from_toml_str(
+            "listen = \"x\"\n[admin]\nenabled = false\nsocket = \"/tmp/a.sock\"",
+        )
+        .expect("should parse");
+        assert!(!cfg.admin.enabled);
+        assert_eq!(cfg.admin.socket.as_deref(), Some("/tmp/a.sock"));
+    }
+
+    #[test]
+    fn admin_defaults_enabled() {
+        let cfg = Config::from_toml_str("listen = \"x\"").expect("should parse");
+        assert!(cfg.admin.enabled);
+        assert_eq!(cfg.admin.socket, None);
+    }
+
+    #[test]
+    fn cli_admin_socket_override() {
+        let mut cfg = Config::from_toml_str("listen = \"x\"").unwrap();
+        let cli = Cli {
+            command: None,
+            config: None,
+            listen: None,
+            no_tui: false,
+            no_admin: true,
+            admin_socket: Some(PathBuf::from("/run/x.sock")),
+            mock: false,
+        };
+        apply_overrides(&mut cfg, &cli);
+        assert!(!cfg.admin.enabled);
+        assert_eq!(cfg.admin.socket.as_deref(), Some("/run/x.sock"));
     }
 
     #[test]

@@ -270,6 +270,11 @@ LoadCredential=config:/etc/next-socks5/config.toml
 ExecStart=${BIN_DIR}/${BIN_NAME} --no-tui --config %d/config
 Restart=on-failure
 DynamicUser=yes
+# Create /run/next-socks5 (writable by the DynamicUser, cleaned up on stop) for
+# the admin/attach Unix socket. 0710: owner rw, same-group may enter, others
+# none; root can still bypass DAC to attach.
+RuntimeDirectory=next-socks5
+RuntimeDirectoryMode=0710
 AmbientCapabilities=CAP_NET_BIND_SERVICE
 NoNewPrivileges=yes
 
@@ -301,6 +306,12 @@ error_log="/var/log/next-socks5.log"
 
 depend() {
     need net
+}
+
+start_pre() {
+    # Create the runtime dir for the admin/attach Unix socket. checkpath is
+    # openrc's idempotent mkdir+chmod.
+    checkpath -d -m 0710 /run/next-socks5
 }
 EOF
     $SUDO chmod +x /etc/init.d/next-socks5
@@ -387,3 +398,8 @@ else
   field "test" "curl --socks5 127.0.0.1:${PORT} https://api.ipify.org"
 fi
 [ -n "$MANAGE_HINT" ] && field "manage" "$MANAGE_HINT"
+if [ "$METHOD" = "docker" ]; then
+  field "实时仪表板" "docker exec -it next-socks5 ${BIN_NAME} attach"
+else
+  field "实时仪表板" "${BIN_DIR}/${BIN_NAME} attach"
+fi

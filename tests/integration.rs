@@ -46,6 +46,7 @@ fn no_auth_config() -> Config {
         timeouts: Timeouts::default(),
         limits: Limits::default(),
         public_addr: None,
+        admin: Default::default(),
     }
 }
 
@@ -223,6 +224,7 @@ fn password_config() -> Config {
         timeouts: Timeouts::default(),
         limits: Limits::default(),
         public_addr: None,
+        admin: Default::default(),
     }
 }
 

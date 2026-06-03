@@ -18,8 +18,10 @@ is hand-written; the dependency footprint is kept deliberately small.
   connection limit → `0x02`, refused/unreachable/timeout mapped from the OS).
 - **UDP relay** — SOCKS5 encapsulation, `FRAG != 0` dropped, source-IP
   filtering, a client-reachable `BND.ADDR` (never `0.0.0.0`), and idle reclaim.
-- **TUI dashboard** — real-time throughput, active-connection table, success/
-  error stats, and a scrolling log (built on ratatui).
+- **TUI dashboard** — real-time throughput with a trend chart, a sortable
+  active-connection table, success/error stats, and a scrollable log with
+  keyboard navigation (built on ratatui). A hidden `--mock` flag streams
+  synthetic data for previewing/testing the UI without real traffic.
 - **Headless mode** — `--no-tui` streams events to stdout, ideal for systemd /
   containers. The TUI is an optional cargo feature, so headless builds drop the
   ratatui/crossterm dependencies entirely.
@@ -151,9 +153,14 @@ listen = "0.0.0.0:1080"
 
 [auth]
 method = "password"        # "none" | "password"
+# One or more credentials — add a [[auth.users]] block per user.
 [[auth.users]]
 username = "alice"
 password = "secret"
+
+[[auth.users]]
+username = "bob"
+password = "hunter2"
 
 [timeouts]
 connect_ms = 10000
@@ -162,17 +169,37 @@ udp_idle_ms = 60000
 
 [limits]
 max_connections = 1024     # optional
+
+[admin]
+enabled = true             # local attach endpoint (default on)
+# socket = "/run/next-socks5/admin.sock"   # override the socket path
 ```
+
+**Multiple users.** With `method = "password"`, add a `[[auth.users]]` block per
+credential — a client is accepted if its username/password matches **any** entry
+in the list (RFC 1929). This is the recommended way to serve several users from a
+single port; you do not need a separate port per user. With `method = "none"` the
+proxy is open and the `users` list is ignored. (The dashboard logs each auth
+attempt as `auth ok/failed for '<user>'`; per-user traffic accounting is not yet
+shown in the connections table.)
 
 ### CLI
 
 ```
-next-socks5 [OPTIONS]
+next-socks5 [OPTIONS]              Run the server (default)
+next-socks5 attach [OPTIONS]       Attach to a running server's dashboard
 
-  --config <path>    Path to a TOML config file
-  --listen <addr>    Override the listen address (e.g. 0.0.0.0:1080)
-  --no-tui           Run headless (events to stdout) instead of the dashboard
-  -h, --help         Print help
+Server options:
+  --config <path>       Path to a TOML config file
+  --listen <addr>       Override the listen address (e.g. 0.0.0.0:1080)
+  --no-tui              Run headless (events to stdout) instead of the dashboard
+  --no-admin            Disable the local admin/attach endpoint
+  --admin-socket <path> Override the admin socket path
+  -h, --help            Print help
+
+attach options:
+  --socket <path>       Admin socket to connect to
+                        (default /run/next-socks5/admin.sock)
 ```
 
 ## Usage
@@ -185,7 +212,87 @@ curl --socks5 127.0.0.1:1080 https://example.com
 curl --socks5 alice:secret@127.0.0.1:1080 https://example.com
 ```
 
-In TUI mode press `q` (or Ctrl-C) to quit; the terminal is always restored.
+### Dashboard (TUI)
+
+The terminal dashboard is on by default — just run the server without
+`--no-tui`:
+
+```bash
+next-socks5 --listen 127.0.0.1:1080
+```
+
+It shows live throughput (with a 30s trend chart), success/error stats, a
+sortable **Active connections** table, and a scrolling **Log**. Keys:
+
+| Key | Action |
+|---|---|
+| `Tab` | Move scroll focus between the connections table and the log (focused panel is highlighted) |
+| `s` | Cycle the connection sort key: `ID` → `UP↓` → `DOWN↓` → `AGE↓` (shown in the table title) |
+| `↑` / `↓` or `k` / `j` | Scroll the focused panel one line |
+| `PgUp` / `PgDn` | Scroll the focused panel one screen |
+| `q` / `Ctrl-C` | Quit |
+
+#### Preview / test the dashboard with synthetic data
+
+To exercise the dashboard without sending any real traffic, add `--mock`. It
+drives the same metrics and event bus the proxy uses with a stream of synthetic
+connections, throughput, and errors — handy for trying the sorting/scrolling
+keys or taking screenshots. The fake activity stops as soon as you quit.
+
+```bash
+# Local preview: open the dashboard and continuously generate mock data.
+cargo run --release -- --listen 127.0.0.1:1080 --mock
+
+# Or with an installed binary:
+next-socks5 --listen 127.0.0.1:1080 --mock
+```
+
+`--mock` is a demo/testing aid only; never enable it on a real proxy.
+
+### Attach to a running service
+
+A service installed via systemd / OpenRC / Docker runs **headless** (no UI of
+its own), but it still serves the live dashboard over a local Unix socket
+(default `/run/next-socks5/admin.sock`). To watch a server that is **already
+running**, attach to it from the same machine — there is nothing to restart and
+no flag to enable; the endpoint is on by default.
+
+```bash
+# 1. SSH into the host where the service runs (as root for the default socket):
+ssh root@your-server
+
+# 2. Attach — default socket /run/next-socks5/admin.sock:
+next-socks5 attach
+
+# Docker: run attach inside the container instead:
+docker exec -it next-socks5 next-socks5 attach
+```
+
+If the service uses a non-default socket path (e.g. a manual install on a custom
+path), point `--socket` at it:
+
+```bash
+next-socks5 attach --socket /tmp/ns5.sock
+```
+
+The endpoint is local-only (no network exposure, no auth) and read-only — attach
+clients observe but cannot control the server. Press `q` to detach; if the
+server stops, the dashboard exits with `connection lost`.
+
+> The default socket lives under `/run/next-socks5` (mode `0710`, owned by the
+> service user). `root` can always attach; a non-root user can only attach to a
+> socket it owns (e.g. a manual install under `/tmp` or `$XDG_RUNTIME_DIR`).
+
+Disable the endpoint with `--no-admin` or `[admin] enabled = false`.
+
+For a manual install (`--no-service`), the process runs as your user and the
+default `/run` path is usually not writable. Start the server with a writable
+socket and attach to the same path:
+
+```bash
+next-socks5 --no-tui --admin-socket /tmp/ns5.sock
+next-socks5 attach --socket /tmp/ns5.sock
+```
 
 ## License
 
