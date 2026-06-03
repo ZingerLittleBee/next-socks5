@@ -19,11 +19,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # ---- Linux (glibc) ----
-          - { target: x86_64-unknown-linux-gnu, os: ubuntu-latest, cross: false }
-          - { target: aarch64-unknown-linux-gnu, os: ubuntu-latest, cross: true }
-          - { target: armv7-unknown-linux-gnueabihf, os: ubuntu-latest, cross: true }
-          # ---- Linux (musl, fully static) ----
+          # ---- Linux (musl, fully static — also runs on glibc distros) ----
           - { target: x86_64-unknown-linux-musl, os: ubuntu-latest, cross: true }
           - { target: aarch64-unknown-linux-musl, os: ubuntu-latest, cross: true }
           - { target: armv7-unknown-linux-musleabihf, os: ubuntu-latest, cross: true }
