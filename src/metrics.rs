@@ -346,7 +346,7 @@ mod tests {
         };
         let bytes = postcard::to_allocvec(&ev).expect("encode");
         let back: Event = postcard::from_bytes(&bytes).expect("decode");
-        assert_eq!(format_event(&ev), format_event(&back));
+        assert_eq!(ev, back);
     }
 
     #[test]
@@ -362,7 +362,6 @@ mod tests {
         };
         let bytes = postcard::to_allocvec(&snap).expect("encode");
         let back: Snapshot = postcard::from_bytes(&bytes).expect("decode");
-        assert_eq!(snap.bytes_up, back.bytes_up);
-        assert_eq!(snap.error_codes, back.error_codes);
+        assert_eq!(snap, back);
     }
 }

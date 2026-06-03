@@ -25,8 +25,12 @@ impl EventRing {
     }
 
     /// Push an event, evicting the oldest when at capacity.
+    ///
+    /// Recovers from a poisoned lock rather than panicking: this runs in the
+    /// service process, and the admin endpoint must never take the proxy down.
+    /// The critical sections here are panic-free, so poisoning is not expected.
     pub fn push(&self, ev: Event) {
-        let mut q = self.inner.lock().unwrap();
+        let mut q = self.inner.lock().unwrap_or_else(|e| e.into_inner());
         if q.len() == ADMIN_EVENT_RING_CAPACITY {
             q.pop_front();
         }
@@ -35,7 +39,12 @@ impl EventRing {
 
     /// Copy the current contents (oldest first) for replay.
     pub fn snapshot(&self) -> Vec<Event> {
-        self.inner.lock().unwrap().iter().cloned().collect()
+        self.inner
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .cloned()
+            .collect()
     }
 
     /// Spawn a task that fills this ring from the event bus until the sender

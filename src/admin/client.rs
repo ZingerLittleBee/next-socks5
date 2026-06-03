@@ -17,9 +17,7 @@ pub struct RemoteState {
 
 impl RemoteState {
     pub fn new() -> Arc<Self> {
-        Arc::new(Self {
-            inner: Mutex::new((Snapshot::default(), Vec::new())),
-        })
+        Arc::new(Self::default())
     }
     fn set(&self, snapshot: Snapshot, connections: Vec<ConnInfo>) {
         *self.inner.lock().unwrap() = (snapshot, connections);
@@ -119,7 +117,8 @@ pub async fn attach(socket_path: &std::path::Path) -> std::io::Result<()> {
     let (sd_tx, sd_rx) = watch::channel(false);
     let lost = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
-    // Decode task reads the rest of the stream.
+    // Decode task reads the rest of the stream. The protocol is server-push
+    // only: the client never writes, so the write half is dropped immediately.
     let (reader, _writer) = stream.into_split();
     let decode = tokio::spawn(decode_loop(
         reader,
