@@ -105,9 +105,9 @@ pub async fn handle(
     // 4. Enforce the connection limit (best-effort, checked after the request).
     if let Some(limit) = cfg.limits.max_connections {
         if metrics.active() >= limit as u64 {
-            reply_failure(&mut stream, Socks5Error::General).await;
+            reply_failure(&mut stream, Socks5Error::NotAllowed).await;
             let _ = events.send(Event::Error {
-                code: Socks5Error::General.reply_code(),
+                code: Socks5Error::NotAllowed.reply_code(),
                 msg: "connection limit reached".to_string(),
             });
             return;

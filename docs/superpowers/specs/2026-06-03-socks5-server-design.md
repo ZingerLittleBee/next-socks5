@@ -170,7 +170,7 @@ Dial errors are mapped precisely from `io::ErrorKind` (e.g.
   and restore the terminal (disable raw mode / leave alternate screen) — including
   on panic, via a terminal-restore guard.
 - **Headless mode:** `--no-tui` skips the dashboard and writes events to stdout.
-- **Max connections:** optional `max_connections` config; over the limit replies `0x01`.
+- **Max connections:** optional `max_connections` config; over the limit replies `0x02` (connection not allowed by ruleset).
 
 ## 10. Configuration (TOML + CLI override)
 
