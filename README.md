@@ -199,32 +199,12 @@ curl --socks5 alice:secret@127.0.0.1:1080 https://example.com
 
 ### Dashboard (TUI)
 
-Running `next-socks5` **without** `--no-tui` launches a live terminal dashboard
-(built on ratatui). It refreshes ~4× per second and shows five panels:
-
-| Panel | Contents |
-|---|---|
-| **Title bar** | Listen address and the `press q to quit` hint. |
-| **Throughput** | Current up/down rate in KB/s plus cumulative bytes transferred. |
-| **Active connections** | Live table: `ID`, `Source`, `Target`, `Kind` (CONNECT/UDP), and per-connection `Up`/`Down`. |
-| **Stats** | Total / active connection counts, success / failure totals, and a per-reply-code error histogram (`0x01 general` … `0x08 badatyp`). |
-| **Log** | Scrolling event log (connect / close / auth / error lines). |
-
-Press `q` (or Ctrl-C) to quit. The terminal is always restored on exit —
-an RAII guard plus a panic hook leave raw mode and the alternate screen even if
-the process panics.
+The terminal dashboard is on by default — just run the server without
+`--no-tui`, and press `q` (or Ctrl-C) to quit:
 
 ```bash
-# Launch the server with the dashboard (default):
 next-socks5 --listen 127.0.0.1:1080
-
-# Run headless instead (events to stdout) — for systemd / containers:
-next-socks5 --no-tui --listen 0.0.0.0:1080
 ```
-
-> The TUI is an optional cargo feature (`tui`, on by default). Headless-only
-> builds (`--no-default-features`) drop the ratatui/crossterm dependencies and
-> always run headless regardless of `--no-tui`.
 
 ### Remote dashboard (attach)
 
