@@ -156,6 +156,19 @@ render_config() {
   echo "udp_idle_ms = 60000"
 }
 
+# Resolve the public IP via api.ipify.org (used for the shown proxy URL).
+get_public_ip() {
+  if command -v curl >/dev/null 2>&1; then
+    curl -fsS -m 5 https://api.ipify.org 2>/dev/null
+  elif command -v wget >/dev/null 2>&1; then
+    wget -qO- -T 5 https://api.ipify.org 2>/dev/null
+  fi
+}
+
+# Print "label:" then its value on the next line, then a blank line, so the
+# value sits alone on one line and is easy to copy.
+field() { printf '%s:\n%s\n\n' "$1" "$2"; }
+
 # Explain how to start the server by hand (used when no service is set up).
 print_manual_start() {
   STARTED="no"
@@ -350,7 +363,9 @@ esac
 
 # --- Summary ------------------------------------------------------------------
 host_display="$LISTEN_ADDR"
-[ "$LISTEN_ADDR" = "0.0.0.0" ] && host_display="<server-ip>"
+case "$LISTEN_ADDR" in
+  0.0.0.0|::) ip="$(get_public_ip)"; host_display="${ip:-<server-ip>}" ;;
+esac
 
 echo ""
 if [ "$STARTED" = "yes" ]; then
@@ -358,20 +373,17 @@ if [ "$STARTED" = "yes" ]; then
 else
   log "next-socks5 installed — NOT started (see warnings above) ⚠"
 fi
-echo "  method   : $METHOD"
-echo "  listen   : ${LISTEN_ADDR}:${PORT}"
-if [ "$AUTH" = "on" ]; then
-  echo "  auth     : password"
-  echo "  username : ${USERNAME}"
-  echo "  password : ${PASSWORD}"
-  echo ""
-  echo "  proxy URL: socks5://${USERNAME}:${PASSWORD}@${host_display}:${PORT}"
-  echo "  test     : curl --socks5 ${USERNAME}:${PASSWORD}@127.0.0.1:${PORT} https://example.com"
-else
-  echo "  auth     : none (open proxy)"
-  echo ""
-  echo "  proxy URL: socks5://${host_display}:${PORT}"
-  echo "  test     : curl --socks5 127.0.0.1:${PORT} https://example.com"
-fi
-[ -n "$MANAGE_HINT" ] && echo "  manage   : ${MANAGE_HINT}"
 echo ""
+field "method" "$METHOD"
+field "listen" "${LISTEN_ADDR}:${PORT}"
+if [ "$AUTH" = "on" ]; then
+  field "username" "$USERNAME"
+  field "password" "$PASSWORD"
+  field "proxy URL" "socks5://${USERNAME}:${PASSWORD}@${host_display}:${PORT}"
+  field "test" "curl --socks5 ${USERNAME}:${PASSWORD}@127.0.0.1:${PORT} https://api.ipify.org"
+else
+  field "auth" "none (open proxy)"
+  field "proxy URL" "socks5://${host_display}:${PORT}"
+  field "test" "curl --socks5 127.0.0.1:${PORT} https://api.ipify.org"
+fi
+[ -n "$MANAGE_HINT" ] && field "manage" "$MANAGE_HINT"
