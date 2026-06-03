@@ -22,13 +22,14 @@ jobs:
           # ---- Linux (musl, fully static — also runs on glibc distros) ----
           - { target: x86_64-unknown-linux-musl, os: ubuntu-latest, cross: true }
           - { target: aarch64-unknown-linux-musl, os: ubuntu-latest, cross: true }
-          - { target: armv7-unknown-linux-musleabihf, os: ubuntu-latest, cross: true }
+          # Temporarily disabled — re-enable when these platforms are needed.
+          # - { target: armv7-unknown-linux-musleabihf, os: ubuntu-latest, cross: true }
           # ---- macOS ----
-          - { target: x86_64-apple-darwin, os: macos-latest, cross: false }
-          - { target: aarch64-apple-darwin, os: macos-latest, cross: false }
+          # - { target: x86_64-apple-darwin, os: macos-latest, cross: false }
+          # - { target: aarch64-apple-darwin, os: macos-latest, cross: false }
           # ---- Windows ----
-          - { target: x86_64-pc-windows-msvc, os: windows-latest, cross: false }
-          - { target: aarch64-pc-windows-msvc, os: windows-latest, cross: false }
+          # - { target: x86_64-pc-windows-msvc, os: windows-latest, cross: false }
+          # - { target: aarch64-pc-windows-msvc, os: windows-latest, cross: false }
     steps:
       - uses: actions/checkout@v4
 
