@@ -6,3 +6,4 @@ pub mod error;
 pub mod metrics;
 pub mod protocol;
 pub mod server;
+pub mod tui;
