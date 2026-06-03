@@ -134,12 +134,15 @@ async fn reply_failure(client: &mut TcpStream, err: Socks5Error) {
     let _ = client.write_all(&out).await;
 }
 
-/// Relay bytes in both directions until one side closes or goes idle.
+/// Relay bytes in both directions until BOTH sides close (or an idle timeout /
+/// error winds a direction down).
 ///
-/// Each direction reads with an idle timeout: if no bytes arrive within `idle`,
-/// the relay stops. `client -> upstream` bytes count as upload, the reverse as
-/// download. When either side reaches EOF, the peer is shut down so it sees the
-/// close too.
+/// Each `TcpStream` is split into independent read/write halves so the two
+/// directions run concurrently via [`tokio::join!`]. This supports half-open
+/// connections: when one direction reaches EOF, only that direction stops and
+/// the writer it feeds is shut down (propagating the FIN) — the other direction
+/// keeps relaying until it too reaches EOF. `client -> upstream` bytes count as
+/// upload, the reverse as download.
 async fn copy_bidirectional_counted(
     client: &mut TcpStream,
     upstream: &mut TcpStream,
@@ -147,54 +150,87 @@ async fn copy_bidirectional_counted(
     metrics: &Metrics,
     id: u64,
 ) -> std::io::Result<()> {
-    let mut buf_up = [0u8; 16 * 1024];
-    let mut buf_down = [0u8; 16 * 1024];
-    let mut client_open = true;
-    let mut upstream_open = true;
+    let (mut client_rd, mut client_wr) = tokio::io::split(client);
+    let (mut upstream_rd, mut upstream_wr) = tokio::io::split(upstream);
 
-    while client_open && upstream_open {
-        tokio::select! {
-            // client -> upstream (upload)
-            res = read_with_idle(client, &mut buf_up, idle) => {
-                match res? {
-                    // EOF or idle timeout on the client side: half-close upstream.
-                    Some(0) | None => {
-                        client_open = false;
-                        let _ = upstream.shutdown().await;
-                    }
-                    Some(n) => {
-                        upstream.write_all(&buf_up[..n]).await?;
-                        metrics.add_up(id, n as u64);
-                    }
-                }
+    // client -> upstream (upload)
+    let up = copy_half(
+        &mut client_rd,
+        &mut upstream_wr,
+        idle,
+        Direction::Up,
+        metrics,
+        id,
+    );
+    // upstream -> client (download)
+    let down = copy_half(
+        &mut upstream_rd,
+        &mut client_wr,
+        idle,
+        Direction::Down,
+        metrics,
+        id,
+    );
+
+    // Drive both directions to completion. Either may end first (on its source
+    // EOF, idle timeout, or error); the relay returns only once both are done.
+    let (up_res, down_res) = tokio::join!(up, down);
+    up_res.and(down_res)
+}
+
+/// Which direction a [`copy_half`] relays, used to pick the byte counter.
+#[derive(Clone, Copy)]
+enum Direction {
+    Up,
+    Down,
+}
+
+/// Copy one direction: read from `src` with an idle timeout and write to `dst`,
+/// counting bytes per `dir`. On source EOF, `dst` is shut down (half-close) so
+/// the peer observes the FIN. On idle timeout the direction simply finishes,
+/// letting the other direction wind down too.
+async fn copy_half<R, W>(
+    src: &mut R,
+    dst: &mut W,
+    idle: Duration,
+    dir: Direction,
+    metrics: &Metrics,
+    id: u64,
+) -> std::io::Result<()>
+where
+    R: AsyncReadExt + Unpin,
+    W: AsyncWriteExt + Unpin,
+{
+    let mut buf = [0u8; 16 * 1024];
+    loop {
+        match read_with_idle(src, &mut buf, idle).await? {
+            // EOF: stop reading this direction and half-close the writer so the
+            // destination sees the close, then finish this direction only.
+            Some(0) | None => {
+                let _ = dst.shutdown().await;
+                return Ok(());
             }
-            // upstream -> client (download)
-            res = read_with_idle(upstream, &mut buf_down, idle) => {
-                match res? {
-                    // EOF or idle timeout on the upstream side: half-close client.
-                    Some(0) | None => {
-                        upstream_open = false;
-                        let _ = client.shutdown().await;
-                    }
-                    Some(n) => {
-                        client.write_all(&buf_down[..n]).await?;
-                        metrics.add_down(id, n as u64);
-                    }
+            Some(n) => {
+                dst.write_all(&buf[..n]).await?;
+                match dir {
+                    Direction::Up => metrics.add_up(id, n as u64),
+                    Direction::Down => metrics.add_down(id, n as u64),
                 }
             }
         }
     }
-
-    Ok(())
 }
 
 /// Read into `buf` with an idle timeout. Returns `Ok(Some(n))` on a read of
 /// `n` bytes (0 means EOF), or `Ok(None)` when the idle timeout elapsed.
-async fn read_with_idle(
-    stream: &mut TcpStream,
+async fn read_with_idle<R>(
+    stream: &mut R,
     buf: &mut [u8],
     idle: Duration,
-) -> std::io::Result<Option<usize>> {
+) -> std::io::Result<Option<usize>>
+where
+    R: AsyncReadExt + Unpin,
+{
     match tokio::time::timeout(idle, stream.read(buf)).await {
         Ok(Ok(n)) => Ok(Some(n)),
         Ok(Err(e)) => Err(e),

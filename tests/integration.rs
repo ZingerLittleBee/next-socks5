@@ -374,6 +374,78 @@ async fn connect_refused_maps_0x05() {
         .expect("connect refused scenario timed out");
 }
 
+/// Spawn a TCP target that replies only AFTER the client half-closes its write
+/// side: it reads until EOF (read returns 0), then writes a known response and
+/// closes. Returns its bound address. This models servers (e.g. HTTP/1.0) that
+/// produce a response only once the request stream has fully ended.
+async fn spawn_reply_after_eof_server(response: &'static [u8]) -> std::net::SocketAddr {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        if let Ok((mut sock, _)) = listener.accept().await {
+            // Drain the request until the peer half-closes (EOF).
+            let mut buf = [0u8; 1024];
+            loop {
+                match sock.read(&mut buf).await {
+                    Ok(0) => break,
+                    Ok(_) => continue,
+                    Err(_) => return,
+                }
+            }
+            // Only now produce the response, then close.
+            let _ = sock.write_all(response).await;
+            let _ = sock.shutdown().await;
+        }
+    });
+    addr
+}
+
+#[tokio::test]
+async fn connect_half_close_receives_full_response() {
+    const RESPONSE: &[u8] = b"RESPONSE-AFTER-EOF";
+
+    let scenario = async {
+        // 1. Target that replies only after the client half-closes.
+        let target_addr = spawn_reply_after_eof_server(RESPONSE).await;
+        let proxy_addr = start_server_with_config(no_auth_config()).await;
+
+        let mut client = TcpStream::connect(proxy_addr).await.unwrap();
+
+        // No-auth handshake.
+        client.write_all(&[0x05, 0x01, 0x00]).await.unwrap();
+        let mut method_reply = [0u8; 2];
+        client.read_exact(&mut method_reply).await.unwrap();
+        assert_eq!(method_reply, [0x05, 0x00]);
+
+        // CONNECT to the target.
+        client
+            .write_all(&connect_v4_request(target_addr))
+            .await
+            .unwrap();
+        let mut reply = [0u8; 10];
+        client.read_exact(&mut reply).await.unwrap();
+        assert_eq!(reply[0], 0x05);
+        assert_eq!(reply[1], 0x00, "expected success reply code");
+
+        // Send the request, then half-close the write side. The proxy must keep
+        // relaying the upstream's response despite the client's EOF.
+        client.write_all(b"REQUEST").await.unwrap();
+        client.shutdown().await.unwrap();
+
+        // Read until EOF and assert the full response made it through.
+        let mut received = Vec::new();
+        client.read_to_end(&mut received).await.unwrap();
+        assert_eq!(
+            received, RESPONSE,
+            "client must receive the full upstream response after half-closing"
+        );
+    };
+
+    tokio::time::timeout(Duration::from_secs(5), scenario)
+        .await
+        .expect("half-close scenario timed out");
+}
+
 #[tokio::test]
 async fn bind_command_not_supported() {
     let scenario = async {
