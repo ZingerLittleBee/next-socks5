@@ -9,6 +9,9 @@ use crate::metrics::{ConnInfo, Event, Snapshot};
 mod ring;
 pub use ring::{EventRing, ADMIN_EVENT_RING_CAPACITY};
 
+mod server;
+pub use server::serve;
+
 /// Wire protocol version. Bump on any breaking change to `Frame`.
 pub const PROTO_VERSION: u16 = 1;
 
