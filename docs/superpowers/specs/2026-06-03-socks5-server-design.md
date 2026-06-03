@@ -5,10 +5,13 @@
 
 ## 1. Goal
 
-A lightweight, scalable SOCKS5 server written in Rust, fully compliant with
-RFC 1928 (SOCKS5) and RFC 1929 (Username/Password authentication), wrapped in a
-terminal dashboard (TUI) that shows live throughput, connections, and statistics.
-A design priority is keeping the dependency footprint small.
+A lightweight, scalable SOCKS5 server written in Rust that implements the
+selected RFC 1928 (SOCKS5) command/auth subset plus RFC 1929 (Username/Password
+authentication), wrapped in a terminal dashboard (TUI) that shows live
+throughput, connections, and statistics. A design priority is keeping the
+dependency footprint small. ("Selected subset" = CONNECT + UDP ASSOCIATE
+commands and No-Auth + Username/Password auth; BIND and GSSAPI are intentionally
+out of scope — see §2.)
 
 ## 2. Scope
 
@@ -17,7 +20,8 @@ A design priority is keeping the dependency footprint small.
   code `0x07` (Command not supported) for RFC-conformant behavior.
 - **Auth methods:** No-Auth (`0x00`) and Username/Password (`0x02`, RFC 1929).
 - **Address types:** IPv4, IPv6, and Domain name (ATYP `0x01` / `0x04` / `0x03`).
-- **DNS:** Domain addresses are resolved server-side via Tokio's `lookup_host`.
+- **DNS:** Domain addresses are resolved server-side via Tokio's `lookup_host`,
+  for both CONNECT targets and UDP relay datagram targets (same strategy).
 - **RFC error mapping:** all reply codes `0x00`–`0x08` are produced where applicable.
 - **Configuration:** TOML config file as the primary source, with CLI flags overriding.
 - **TUI dashboard:** real-time rate + total traffic, active connection list,
@@ -77,8 +81,8 @@ bridge between the server and the TUI.
 |---|---|---|
 | `tokio` | Async runtime | Features: `net, rt-multi-thread, io-util, time, sync, macros, signal` |
 | `ratatui` + `crossterm` | TUI | Dashboard rendering |
-| `serde` + `toml` | Config parsing | |
-| `clap` (derive) | CLI override | `--help`, validation, ergonomics |
+| `serde` + `toml` | Config parsing | `serde` with the `derive` feature |
+| `clap` | CLI override | `derive` feature; `--help`, validation, ergonomics |
 | `thiserror` | Error -> RFC code mapping | Compile-time only, zero runtime cost |
 
 Deliberately **not** used:
@@ -97,10 +101,28 @@ Per TCP connection -> spawn connection::handle:
    method negotiation -> (optional) username/password auth -> parse request
      ├─ CONNECT -> resolve domain locally -> dial (connect timeout) -> bidirectional copy
      │             byte counts accumulate into Metrics; idle timeout disconnects
-     ├─ UDP ASSOCIATE -> bind UDP socket -> reply BND.ADDR/PORT
-     │             relay datagrams; reclaim on TCP control close or idle timeout
+     ├─ UDP ASSOCIATE -> bind UDP socket -> reply BND.ADDR/PORT (client-reachable)
+     │             decapsulate/relay datagrams; reclaim on TCP control close or idle timeout
      └─ BIND -> reply 0x07 (Command not supported)
 ```
+
+### UDP ASSOCIATE details (RFC 1928 §7)
+
+- **Encapsulation:** datagrams from the client are NOT raw payload. Each carries the
+  SOCKS5 UDP request header: `RSV(2 bytes, 0x0000) + FRAG(1) + ATYP(1) + DST.ADDR + DST.PORT + DATA`.
+  The relay parses this header, resolves the target (domain targets use the same
+  server-side DNS strategy as CONNECT), and forwards `DATA` to the target. Replies
+  from the target are re-encapsulated with the same header (ATYP/address of the
+  responder) before being sent back to the client.
+- **Fragmentation:** `FRAG != 0` is unsupported; such datagrams are silently dropped.
+- **Source filtering:** the relay records the client's IP from the authenticated TCP
+  control connection. Inbound UDP datagrams whose source IP does not match are
+  dropped, preventing unauthenticated injection into an established association.
+- **BND.ADDR/PORT:** the reply advertises a client-reachable bind address (derived
+  from the TCP control connection's local address / configured public address),
+  never `0.0.0.0`.
+- **Lifetime:** the association is bound to the TCP control connection. When that TCP
+  connection closes, or after the UDP idle timeout, the UDP socket is reclaimed.
 
 **Rate calculation:** byte totals are kept in `AtomicU64` counters updated on the
 hot path. The TUI samples the deltas each tick (~250 ms) to compute KB/s, keeping
@@ -141,9 +163,12 @@ Dial errors are mapped precisely from `io::ErrorKind` (e.g.
 
 - **Timeouts:** connect timeout, TCP idle timeout, and UDP association idle
   timeout — all configurable.
-- **Graceful shutdown:** `tokio::signal` catches Ctrl-C -> `watch` channel
-  broadcasts shutdown -> stop accepting, drain active connections, restore the
-  terminal.
+- **Graceful shutdown:** two paths feed the same `watch` shutdown channel.
+  In headless mode `tokio::signal` catches Ctrl-C. In TUI mode crossterm raw mode
+  delivers Ctrl-C (and the `q` quit key) as keyboard events, so the TUI event loop
+  also broadcasts shutdown. On shutdown: stop accepting, drain active connections,
+  and restore the terminal (disable raw mode / leave alternate screen) — including
+  on panic, via a terminal-restore guard.
 - **Headless mode:** `--no-tui` skips the dashboard and writes events to stdout.
 - **Max connections:** optional `max_connections` config; over the limit replies `0x01`.
 
@@ -175,10 +200,12 @@ CLI flags override config values, e.g. `--listen`, `--no-tui`, `--config <path>`
 
 - **Protocol unit tests:** encode/decode and edge cases for handshake, request,
   address, and reply (truncated input, invalid ATYP, max domain length, auth
-  success/failure).
+  success/failure). Includes the SOCKS5 UDP header: encap/decap round-trip,
+  `FRAG != 0` drop, and domain ATYP in UDP datagrams.
 - **Integration tests:** start a local server and use a real client to exercise
   No-Auth CONNECT (against a local echo server), password auth success/failure,
-  UDP ASSOCIATE round-trip, and triggering of individual error codes.
+  UDP ASSOCIATE round-trip (with correct encapsulation), UDP source-IP filtering
+  (datagram from a non-client IP is dropped), and triggering of individual error codes.
 
 ## 12. Open questions
 
