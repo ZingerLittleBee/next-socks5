@@ -51,10 +51,10 @@ impl SortKey {
     /// Short label for the table title, including the sort direction arrow.
     pub fn label(self) -> &'static str {
         match self {
-            SortKey::Id => "id",
-            SortKey::Up => "up↓",
-            SortKey::Down => "down↓",
-            SortKey::Age => "age↓",
+            SortKey::Id => "ID",
+            SortKey::Up => "UP↓",
+            SortKey::Down => "DOWN↓",
+            SortKey::Age => "AGE↓",
         }
     }
 }
