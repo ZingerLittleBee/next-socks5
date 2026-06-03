@@ -179,6 +179,11 @@ impl Metrics {
     pub fn connections(&self) -> Vec<ConnInfo> {
         self.registry.lock().unwrap().values().cloned().collect()
     }
+
+    /// Current number of active connections.
+    pub fn active(&self) -> u64 {
+        self.active_conns.load(Ordering::Relaxed)
+    }
 }
 
 #[cfg(test)]
