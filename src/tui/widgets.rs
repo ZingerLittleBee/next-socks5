@@ -205,23 +205,31 @@ fn human_bytes(n: u64) -> String {
 pub fn render(frame: &mut Frame, state: &super::DashboardState) {
     let area = frame.area();
 
-    // Title bar, then four stacked panels.
+    // Title bar, throughput row, a main row (connections + log side by side),
+    // then the stats footer.
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
-            Constraint::Length(1), // title bar
-            Constraint::Length(9), // rate panel (text + sparklines)
-            Constraint::Min(6),    // connections table
-            Constraint::Length(6), // stats panel
-            Constraint::Min(5),    // log panel
+            Constraint::Length(1),  // title bar
+            Constraint::Length(10), // rate panel (text + sparklines)
+            Constraint::Min(6),     // main row: connections | log
+            Constraint::Length(6),  // stats panel
         ])
         .split(area);
 
     render_title(frame, chunks[0], state);
     render_rate(frame, chunks[1], state);
-    render_connections(frame, chunks[2], state);
+
+    // Connections on the left, log on the right, so the terminal width is used
+    // instead of leaving a full-width log half-empty.
+    let main = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(62), Constraint::Percentage(38)])
+        .split(chunks[2]);
+    render_connections(frame, main[0], state);
+    render_log(frame, main[1], state);
+
     render_stats(frame, chunks[3], state);
-    render_log(frame, chunks[4], state);
 }
 
 fn render_title(frame: &mut Frame, area: Rect, state: &super::DashboardState) {
