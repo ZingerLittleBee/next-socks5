@@ -21,7 +21,7 @@ pub enum ConnKind {
 }
 
 /// Per-connection bookkeeping stored in the registry.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ConnInfo {
     pub id: u64,
     pub src: SocketAddr,
@@ -32,7 +32,7 @@ pub struct ConnInfo {
 }
 
 /// A point-in-time copy of the global counters for the TUI to sample.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Snapshot {
     pub bytes_up: u64,
     pub bytes_down: u64,
@@ -44,7 +44,7 @@ pub struct Snapshot {
 }
 
 /// Log/lifecycle events delivered to the TUI log panel or stdout (headless).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Event {
     Connect {
         id: u64,
