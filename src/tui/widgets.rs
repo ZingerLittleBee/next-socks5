@@ -72,11 +72,13 @@ pub fn severity_of(ev: &Event) -> Severity {
     }
 }
 
-/// One stored log line: its rendered text plus a severity for colouring.
+/// One stored log line: its rendered text, a severity for colouring, and the
+/// connection id it belongs to (so a later "closed" can update it in place).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LogLine {
     pub severity: Severity,
     pub text: String,
+    pub conn_id: Option<u64>,
 }
 
 /// Fixed-capacity log ring buffer.
@@ -98,13 +100,30 @@ impl LogRing {
         }
     }
 
-    /// Append a line with the given severity, dropping the oldest when at
-    /// capacity.
-    pub fn push(&mut self, severity: Severity, text: String) {
+    /// Append a line with the given severity (and optional owning connection
+    /// id), dropping the oldest when at capacity.
+    pub fn push(&mut self, severity: Severity, text: String, conn_id: Option<u64>) {
         if self.buf.len() == self.cap {
             self.buf.pop_front();
         }
-        self.buf.push_back(LogLine { severity, text });
+        self.buf.push_back(LogLine {
+            severity,
+            text,
+            conn_id,
+        });
+    }
+
+    /// Mark a connection's existing log line as closed: dim it and append
+    /// `closed`, rather than emitting a separate line. No-op if the line has
+    /// already scrolled out of the ring.
+    pub fn mark_closed(&mut self, id: u64) {
+        for line in self.buf.iter_mut().rev() {
+            if line.conn_id == Some(id) && line.severity != Severity::Dim {
+                line.severity = Severity::Dim;
+                line.text.push_str("  closed");
+                return;
+            }
+        }
     }
 
     /// Number of lines currently stored.
@@ -521,7 +540,7 @@ mod tests {
     fn logring_drops_oldest_at_capacity() {
         let mut ring = LogRing::new(3);
         for t in ["a", "b", "c", "d"] {
-            ring.push(Severity::Info, t.into());
+            ring.push(Severity::Info, t.into(), None);
         }
         assert_eq!(ring.len(), 3);
         let texts: Vec<&str> = ring.lines().map(|l| l.text.as_str()).collect();
@@ -532,8 +551,8 @@ mod tests {
     fn logring_within_capacity_preserves_order() {
         let mut ring = LogRing::new(5);
         assert!(ring.is_empty());
-        ring.push(Severity::Info, "one".into());
-        ring.push(Severity::Warn, "two".into());
+        ring.push(Severity::Info, "one".into(), None);
+        ring.push(Severity::Warn, "two".into(), None);
         assert_eq!(ring.len(), 2);
         let lines: Vec<(Severity, &str)> =
             ring.lines().map(|l| (l.severity, l.text.as_str())).collect();
@@ -541,6 +560,27 @@ mod tests {
             lines,
             vec![(Severity::Info, "one"), (Severity::Warn, "two")]
         );
+    }
+
+    #[test]
+    fn mark_closed_updates_connect_line_in_place() {
+        let mut ring = LogRing::new(10);
+        ring.push(Severity::Info, "[#1] CONNECT open a -> b".into(), Some(1));
+        ring.push(Severity::Info, "[#2] CONNECT open c -> d".into(), Some(2));
+
+        ring.mark_closed(1);
+
+        // No new line is added; the matching line is dimmed and ends with closed.
+        assert_eq!(ring.len(), 2);
+        let lines: Vec<&LogLine> = ring.lines().collect();
+        assert_eq!(lines[0].severity, Severity::Dim);
+        assert!(lines[0].text.ends_with("closed"));
+        // The other connection is untouched.
+        assert_eq!(lines[1].severity, Severity::Info);
+
+        // Closing an unknown / already-gone id is a no-op.
+        ring.mark_closed(999);
+        assert_eq!(ring.len(), 2);
     }
 
     #[test]

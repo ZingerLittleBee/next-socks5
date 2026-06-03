@@ -200,13 +200,27 @@ pub async fn run(
 fn drain_events(events: &mut broadcast::Receiver<Event>, log: &mut LogRing) {
     loop {
         match events.try_recv() {
-            Ok(ev) => log.push(widgets::severity_of(&ev), crate::metrics::format_event(&ev)),
+            // A close updates the connection's existing line in place rather
+            // than emitting a separate "[#id] closed" entry.
+            Ok(Event::Closed { id }) => log.mark_closed(id),
+            Ok(ev) => {
+                let conn_id = match &ev {
+                    Event::Connect { id, .. } => Some(*id),
+                    _ => None,
+                };
+                log.push(
+                    widgets::severity_of(&ev),
+                    crate::metrics::format_event(&ev),
+                    conn_id,
+                );
+            }
             Err(broadcast::error::TryRecvError::Empty)
             | Err(broadcast::error::TryRecvError::Closed) => break,
             Err(broadcast::error::TryRecvError::Lagged(n)) => {
                 log.push(
                     widgets::Severity::Warn,
                     format!("(log lagged, dropped {n} events)"),
+                    None,
                 );
             }
         }
