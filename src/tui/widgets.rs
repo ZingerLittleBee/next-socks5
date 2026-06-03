@@ -261,20 +261,32 @@ fn human_bytes(n: u64) -> String {
 pub fn render(frame: &mut Frame, state: &super::DashboardState) {
     let area = frame.area();
 
-    // Title bar, throughput row, a main row (connections + log side by side),
-    // then the stats footer.
+    // Title, then an info band (Throughput stacked over Stats on the left, a
+    // tall Trend chart on the right), then the main row (connections + log).
     let chunks = Layout::default()
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1),  // title bar
-            Constraint::Length(10), // rate panel (text + sparklines)
+            Constraint::Length(13), // info band: left column + Trend chart
             Constraint::Min(6),     // main row: connections | log
-            Constraint::Length(6),  // stats panel
         ])
         .split(area);
 
     render_title(frame, chunks[0], state);
-    render_rate(frame, chunks[1], state);
+
+    // Info band: left column holds Throughput over Stats; the Trend chart on the
+    // right spans the full band height so it reads clearly.
+    let band = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
+        .split(chunks[1]);
+    let left = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(6), Constraint::Min(5)])
+        .split(band[0]);
+    render_throughput(frame, left[0], state);
+    render_stats(frame, left[1], state);
+    render_chart(frame, band[1], state);
 
     // Connections on the left, log on the right, so the terminal width is used
     // instead of leaving a full-width log half-empty.
@@ -284,8 +296,6 @@ pub fn render(frame: &mut Frame, state: &super::DashboardState) {
         .split(chunks[2]);
     render_connections(frame, main[0], state);
     render_log(frame, main[1], state);
-
-    render_stats(frame, chunks[3], state);
 }
 
 fn render_title(frame: &mut Frame, area: Rect, state: &super::DashboardState) {
@@ -306,15 +316,8 @@ fn render_title(frame: &mut Frame, area: Rect, state: &super::DashboardState) {
     frame.render_widget(p, area);
 }
 
-fn render_rate(frame: &mut Frame, area: Rect, state: &super::DashboardState) {
+fn render_throughput(frame: &mut Frame, area: Rect, state: &super::DashboardState) {
     let snap = &state.snapshot;
-    // Left: current rates + totals as text. Right: a combined Up/Down line
-    // chart sharing one set of axes (x = time, y = KB/s).
-    let cols = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Length(40), Constraint::Min(24)])
-        .split(area);
-
     let text = vec![
         Line::from(format!(
             "Up:   {:>8.1} KB/s  total {}",
@@ -334,9 +337,13 @@ fn render_rate(frame: &mut Frame, area: Rect, state: &super::DashboardState) {
         .style(Style::default().fg(Color::DarkGray)),
     ];
     let block = Block::default().borders(Borders::ALL).title("Throughput");
-    frame.render_widget(Paragraph::new(text).block(block), cols[0]);
+    frame.render_widget(Paragraph::new(text).block(block), area);
+}
 
-    // Pin the newest sample to the right edge ("now"); history fills leftward.
+fn render_chart(frame: &mut Frame, area: Rect, state: &super::DashboardState) {
+    // A combined Up/Down line chart sharing one set of axes (x = time,
+    // y = throughput). Pin the newest sample to the right edge ("now"); history
+    // fills leftward.
     let up = state.up_history.samples();
     let down = state.down_history.samples();
     let window = state.up_history.capacity();
@@ -389,7 +396,7 @@ fn render_rate(frame: &mut Frame, area: Rect, state: &super::DashboardState) {
                 .bounds([0.0, ymax])
                 .labels(y_labels),
         );
-    frame.render_widget(chart, cols[1]);
+    frame.render_widget(chart, area);
 }
 
 fn render_connections(frame: &mut Frame, area: Rect, state: &super::DashboardState) {
