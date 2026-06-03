@@ -44,6 +44,8 @@ impl Socks5Error {
     /// to [`Socks5Error::General`].
     pub fn from_io(e: &io::Error) -> Self {
         match e.kind() {
+            io::ErrorKind::NetworkUnreachable => Socks5Error::NetworkUnreachable,
+            io::ErrorKind::HostUnreachable => Socks5Error::HostUnreachable,
             io::ErrorKind::ConnectionRefused => Socks5Error::ConnectionRefused,
             io::ErrorKind::TimedOut => Socks5Error::TtlExpired,
             io::ErrorKind::AddrNotAvailable => Socks5Error::HostUnreachable,
@@ -78,5 +80,17 @@ mod tests {
     fn from_io_timed_out() {
         let e = io::Error::from(io::ErrorKind::TimedOut);
         assert_eq!(Socks5Error::from_io(&e).reply_code(), 0x06);
+    }
+
+    #[test]
+    fn from_io_network_unreachable() {
+        let e = io::Error::from(io::ErrorKind::NetworkUnreachable);
+        assert_eq!(Socks5Error::from_io(&e).reply_code(), 0x03);
+    }
+
+    #[test]
+    fn from_io_host_unreachable() {
+        let e = io::Error::from(io::ErrorKind::HostUnreachable);
+        assert_eq!(Socks5Error::from_io(&e).reply_code(), 0x04);
     }
 }
