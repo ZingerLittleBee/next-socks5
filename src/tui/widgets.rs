@@ -11,8 +11,11 @@ use std::time::{Duration, Instant};
 
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
+use ratatui::symbols::Marker;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Borders, Cell, List, ListItem, Paragraph, Row, Sparkline, Table};
+use ratatui::widgets::{
+    Axis, Block, Borders, Cell, Chart, Dataset, GraphType, List, ListItem, Paragraph, Row, Table,
+};
 use ratatui::Frame;
 
 use crate::metrics::{ConnKind, Event};
@@ -153,6 +156,11 @@ impl RateHistory {
     pub fn peak(&self) -> u64 {
         self.buf.iter().copied().max().unwrap_or(0)
     }
+
+    /// Maximum number of samples retained (the chart's time window).
+    pub fn capacity(&self) -> usize {
+        self.cap
+    }
 }
 
 /// Format a duration as `H:MM:SS` (hours uncapped), used for uptime.
@@ -252,10 +260,11 @@ fn render_title(frame: &mut Frame, area: Rect, state: &super::DashboardState) {
 
 fn render_rate(frame: &mut Frame, area: Rect, state: &super::DashboardState) {
     let snap = &state.snapshot;
-    // Left: current rates + totals as text. Right: up/down trend sparklines.
+    // Left: current rates + totals as text. Right: a combined Up/Down line
+    // chart sharing one set of axes (x = time, y = KB/s).
     let cols = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Length(40), Constraint::Min(12)])
+        .constraints([Constraint::Length(40), Constraint::Min(24)])
         .split(area);
 
     let text = vec![
@@ -279,20 +288,64 @@ fn render_rate(frame: &mut Frame, area: Rect, state: &super::DashboardState) {
     let block = Block::default().borders(Borders::ALL).title("Throughput");
     frame.render_widget(Paragraph::new(text).block(block), cols[0]);
 
-    let trend = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-        .split(cols[1]);
-    let up = Sparkline::default()
-        .block(Block::default().borders(Borders::ALL).title("Up KB/s"))
-        .data(state.up_history.samples())
-        .style(Style::default().fg(Color::Green));
-    let down = Sparkline::default()
-        .block(Block::default().borders(Borders::ALL).title("Down KB/s"))
-        .data(state.down_history.samples())
-        .style(Style::default().fg(Color::Cyan));
-    frame.render_widget(up, trend[0]);
-    frame.render_widget(down, trend[1]);
+    // Pin the newest sample to the right edge ("now"); history fills leftward.
+    let up = state.up_history.samples();
+    let down = state.down_history.samples();
+    let window = state.up_history.capacity();
+    let offset = window.saturating_sub(up.len());
+    let to_points = |series: &[u64]| -> Vec<(f64, f64)> {
+        series
+            .iter()
+            .enumerate()
+            .map(|(i, &v)| ((offset + i) as f64, v as f64))
+            .collect()
+    };
+    let up_pts = to_points(&up);
+    let down_pts = to_points(&down);
+
+    let ymax = up
+        .iter()
+        .chain(down.iter())
+        .copied()
+        .max()
+        .unwrap_or(0)
+        .max(1) as f64;
+    let y_labels = vec![
+        "0".to_string(),
+        format!("{}", (ymax / 2.0) as u64),
+        format!("{} KB/s", ymax as u64),
+    ];
+
+    let datasets = vec![
+        Dataset::default()
+            .name("↑ up")
+            .marker(Marker::Braille)
+            .graph_type(GraphType::Line)
+            .style(Style::default().fg(Color::Green))
+            .data(&up_pts),
+        Dataset::default()
+            .name("↓ down")
+            .marker(Marker::Braille)
+            .graph_type(GraphType::Line)
+            .style(Style::default().fg(Color::Cyan))
+            .data(&down_pts),
+    ];
+    // The time window is RATE_HISTORY * TICK = 120 * 250ms = 30s.
+    let chart = Chart::new(datasets)
+        .block(Block::default().borders(Borders::ALL).title("KB/s"))
+        .x_axis(
+            Axis::default()
+                .style(Style::default().fg(Color::DarkGray))
+                .bounds([0.0, (window.max(1) - 1) as f64])
+                .labels(["-30s", "-15s", "now"]),
+        )
+        .y_axis(
+            Axis::default()
+                .style(Style::default().fg(Color::DarkGray))
+                .bounds([0.0, ymax])
+                .labels(y_labels),
+        );
+    frame.render_widget(chart, cols[1]);
 }
 
 fn render_connections(frame: &mut Frame, area: Rect, state: &super::DashboardState) {
