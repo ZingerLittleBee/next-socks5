@@ -98,9 +98,12 @@ pub async fn run(
 每帧 = `u32`（大端长度前缀）+ postcard 编码的 `Frame`：
 
 ```rust
+pub const PROTO_VERSION: u16 = 1; // 当前协议版本，破坏兼容时递增
+pub const MAX_FRAME_LEN: u32 = 1 << 20; // 帧长上限 1 MiB，超限视为协议错误
+
 #[derive(Serialize, Deserialize)]
 enum Frame {
-    Hello { proto: u16, listen_addr: Option<String> }, // 握手，带协议版本
+    Hello { proto: u16, listen_addr: Option<String> }, // 握手，带协议版本与监听地址
     Stats { snapshot: Snapshot, connections: Vec<ConnInfo> }, // 周期推送
     Event(Event),                                       // 实时 / 回放
 }
@@ -110,21 +113,26 @@ enum Frame {
 （`SocketAddr` 自带 serde 支持）。
 
 连接生命周期：
-1. 服务端 accept 后立即发 `Hello`（含 `proto` 版本号常量与 `listen_addr`）。
+1. 服务端 accept 后立即发 `Hello`（`proto = PROTO_VERSION`，`listen_addr` 为服务实际监听地址）。
 2. 复制 event ring 当前内容，逐条作为 `Event` 帧回放。
 3. 之后进入循环：每 250ms 推一个 `Stats` 帧 + 实时收到的 `Event` 帧。
 
-客户端收到 `Hello` 后校验 `proto`，不匹配则报错退出，避免跨版本乱码。
+客户端收到 `Hello` 后校验 `proto == PROTO_VERSION`，不匹配则报错退出（提示双方版本），避免跨版本乱码。
+读帧时长度前缀超过 `MAX_FRAME_LEN` 视为协议错误，防止损坏/异常长度导致过量内存分配。
+`Hello.listen_addr` 用于填充 attach 端 `DashboardState.listen_addr`，显示在 TUI 标题栏。
 
 ## 服务端组件（新模块 `src/admin.rs`）
 
 ### 共享 event ring
-- 一个常驻 task 订阅 `events` broadcast，维护 `Arc<Mutex<VecDeque<Event>>>`，容量 500
-  （与现有 `LOG_CAPACITY` 一致），满则弹出最旧。
+- 一个常驻 task 订阅 `events` broadcast，维护 `Arc<Mutex<VecDeque<Event>>>`，容量由 admin 模块
+  自有常量 `ADMIN_EVENT_RING_CAPACITY = 500` 决定（**不**依赖 `tui::LOG_CAPACITY`，两者职责独立，
+  数值恰好相同），满则弹出最旧。
 - 新 attach 客户端连上时复制其当前内容用于回放。
 
 ### admin 监听器
-- `UnixListener::bind`；bind 前先 unlink 残留的 socket 文件。
+- `UnixListener::bind`；bind 前若目标路径已存在，**仅当它确为 socket 文件**
+  （`metadata.file_type().is_socket()`）时才 unlink，避免误删同名普通文件/目录；
+  否则报错退出，不静默覆盖。
 - 每个客户端连接 `spawn` 一个 handler：
   - 发 `Hello` → 复制 ring 回放 → `select!` {
     250ms ticker 采样 `snapshot()`/`connections()` 推 `Stats`
@@ -133,11 +141,16 @@ enum Frame {
   - 单个客户端出错只记录日志，不影响代理服务或其他客户端。
 - 写入帧失败（客户端断开）即结束该 handler。
 
-### 启动时机
+### 启动时机与配置
 - 在 `main.rs`：只要不是 `attach` 子命令（即正常跑服务，无论 TUI 还是 headless），
-  就启动 event ring task + admin 监听器（默认常开）。
+  就启动 event ring task + admin 监听器（**默认常开**）。
 - socket bind 失败仅 `eprintln` 警告，不让主服务退出——attach 是附属能力。
-- 提供 `--no-admin` 开关（及 config `[admin] enabled`）以便需要时关闭。
+- **关闭开关（保留，默认开启）**：`--no-admin` 命令行开关，以及 config `[admin] enabled`
+  （默认 `true`）。成本很低，作为安全/部署逃生口。
+- **服务端 socket 路径可配置**：config `[admin] socket = "<path>"` 与 `--admin-socket <path>`，
+  默认 `/run/next-socks5/admin.sock`。优先级与现有 config 合并逻辑一致：CLI 覆盖 config，
+  config 覆盖默认。服务端只负责在该路径 bind；**父目录的创建与权限由部署层负责**
+  （systemd/openrc/docker/manual，见「部署改动」）。
 
 ### feature 边界
 - admin 服务端**不依赖** ratatui，headless-only build（无 `tui` feature）也能编译并被 attach。
@@ -164,15 +177,27 @@ enum Frame {
 | 多个 attach 同时连 | 各自独立 handler，互不影响 |
 | 客户端写入失败 | 结束该 handler，服务不受影响 |
 
+**attach 端 decode task 的退出契约**：decode task 在遇到 **EOF、IO 错误，或协议错误（解码失败 /
+版本不匹配 / 帧长超过 `MAX_FRAME_LEN`）** 时，**必须**触发 TUI 退出——通过 attach 进程内的
+`shutdown` watch 通道（复用现有 `tui::run` 的 shutdown 机制）。`tui::run` 经 `TerminalGuard`
+恢复终端后，attach 进程在**终端已恢复**的状态下向 stderr 打印 `connection lost`
+（不能在 alternate-screen 内打印，否则会被清屏吞掉）。
+
 ## 部署改动（`install.sh`）
+
+socket 父目录（默认 `/run/next-socks5`）的创建与权限由各部署场景负责：
 
 - **systemd**：unit 增加
   - `RuntimeDirectory=next-socks5`（自动创建 `/run/next-socks5`，DynamicUser 进程可写，服务停时清理）
-  - `RuntimeDirectoryMode=0710`
+  - `RuntimeDirectoryMode=0710`（owner 读写、同组可进入、其他无权；root 仍可绕 DAC 访问）
   - root（SSH 进去）可绕过 DAC 直接连 socket，符合典型 attach 场景。
-- **openrc**：init 脚本 `start_pre` 里 `mkdir -p /run/next-socks5`。
-- **docker**：host 模式下 socket 在容器内，attach 需 `docker exec -it <container> next-socks5 attach`
-  （文档说明）。
+- **openrc**：init 脚本 `start_pre` 里 `mkdir -p /run/next-socks5 && chmod 0710 /run/next-socks5`
+  （openrc 服务以 root 跑，socket 归 root，attach 也以 root 跑，权限自然匹配）。
+- **docker**：host 模式下 socket 在容器内的 `/run/next-socks5`（容器以 root 跑，目录由 entrypoint 或
+  进程启动前 `mkdir` 创建）；attach 需 `docker exec -it <container> next-socks5 attach`（文档说明）。
+- **manual（`--no-service`）**：进程以当前用户跑，默认 `/run/next-socks5` 普通用户通常不可写。
+  文档建议改用可写路径，例如 `--admin-socket /tmp/next-socks5.sock`（或 `$XDG_RUNTIME_DIR` 下），
+  attach 时用同一 `--socket` 指向它。
 - 安装总结新增一行：`实时仪表板: next-socks5 attach`（docker 则给 exec 形式）。
 
 ## 测试策略
@@ -196,7 +221,8 @@ enum Frame {
 - `src/metrics.rs`：新增 `MetricsSource` trait 与 derive；为数据结构加 serde derive。
 - `src/tui/mod.rs`：`run` 签名改为接受 `Arc<dyn MetricsSource>`。
 - `src/admin.rs`（新）：event ring、admin 监听器、`Frame` 协议、attach 客户端。
-- `src/config.rs`：CLI 子命令、`--socket` / `--no-admin`、`[admin]` 配置。
+- `src/config.rs`：CLI 子命令；服务端 `--admin-socket` / `--no-admin` 与 `[admin] { enabled, socket }`
+  配置；attach 客户端 `--socket`。
 - `src/main.rs`：子命令分发；正常模式下启动 admin 监听器。
 - `Cargo.toml`：新增 `postcard` 依赖。
 - `install.sh`：systemd `RuntimeDirectory` / openrc `mkdir` / 安装总结提示。
