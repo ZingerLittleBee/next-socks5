@@ -250,7 +250,11 @@ Description=next-socks5 SOCKS5 server
 After=network.target
 
 [Service]
-ExecStart=${BIN_DIR}/${BIN_NAME} --no-tui --config /etc/next-socks5/config.toml
+# Read the config as root and hand it (mode 0400) to the DynamicUser via the
+# systemd credentials store, so the random service UID can read it without
+# widening the file's own permissions (the config holds the password).
+LoadCredential=config:/etc/next-socks5/config.toml
+ExecStart=${BIN_DIR}/${BIN_NAME} --no-tui --config %d/config
 Restart=on-failure
 DynamicUser=yes
 AmbientCapabilities=CAP_NET_BIND_SERVICE
