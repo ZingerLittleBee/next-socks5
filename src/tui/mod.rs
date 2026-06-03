@@ -11,17 +11,20 @@
 pub mod widgets;
 
 use std::io::{self, Stdout};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crossterm::event::{self, Event as CtEvent, KeyCode, KeyEventKind, KeyModifiers};
+use crossterm::event::{
+    self, Event as CtEvent, KeyCode, KeyEvent, KeyEventKind, KeyModifiers,
+};
 use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
-use tokio::sync::{broadcast, watch};
+use tokio::sync::{broadcast, mpsc, watch};
 
 use std::collections::HashMap;
 
@@ -147,6 +150,19 @@ pub async fn run(
     let mut last_instant = Instant::now();
     let mut ticker = tokio::time::interval(TICK);
 
+    // Read key input on a dedicated thread that forwards actions over a channel.
+    // Polling directly inside `select!` via `spawn_blocking` loses keystrokes:
+    // when the tick branch wins the race, the in-flight blocking read is
+    // detached but keeps running and swallows the next key. Queued channel
+    // messages, by contrast, survive `select!` cancelling the recv future, so
+    // every key lands and scrolling stays smooth.
+    let (key_tx, mut key_rx) = mpsc::unbounded_channel::<KeyAction>();
+    let reader_stop = Arc::new(AtomicBool::new(false));
+    let reader_handle = {
+        let stop = reader_stop.clone();
+        std::thread::spawn(move || input_loop(&key_tx, &stop))
+    };
+
     loop {
         tokio::select! {
             // Periodic sample + redraw.
@@ -194,16 +210,20 @@ pub async fn run(
                 terminal.draw(|f| widgets::render(f, &state))?;
             }
 
-            // Key input: poll on a blocking thread so we never stall the runtime.
-            res = tokio::task::spawn_blocking(poll_key) => {
-                if let Ok(Ok(Some(action))) = res {
-                    if matches!(action, KeyAction::Quit) {
+            // Key input forwarded from the reader thread.
+            maybe_action = key_rx.recv() => {
+                match maybe_action {
+                    Some(KeyAction::Quit) => {
                         let _ = shutdown_tx.send(true);
                         break;
                     }
-                    let (conn_avail, log_avail) = panel_avail(terminal.size()?.height);
-                    apply_action(&mut state, action, conn_avail, log_avail);
-                    terminal.draw(|f| widgets::render(f, &state))?;
+                    Some(action) => {
+                        let (conn_avail, log_avail) = panel_avail(terminal.size()?.height);
+                        apply_action(&mut state, action, conn_avail, log_avail);
+                        terminal.draw(|f| widgets::render(f, &state))?;
+                    }
+                    // Reader thread exited; nothing more will arrive.
+                    None => break,
                 }
             }
 
@@ -215,6 +235,11 @@ pub async fn run(
             }
         }
     }
+
+    // Signal the reader thread to stop and wait for it so it doesn't outlive the
+    // restored terminal.
+    reader_stop.store(true, Ordering::Relaxed);
+    let _ = reader_handle.join();
 
     Ok(())
 }
@@ -310,30 +335,49 @@ enum KeyAction {
 /// One screen's worth of lines for Page Up / Page Down.
 const PAGE: usize = 10;
 
-/// Poll crossterm for a key event for up to one tick, mapping it to a
-/// [`KeyAction`]. Returns `None` when the key isn't one we handle. Runs on a
-/// blocking thread.
-fn poll_key() -> io::Result<Option<KeyAction>> {
-    if event::poll(TICK)? {
-        if let CtEvent::Key(key) = event::read()? {
-            // Only react to presses (Windows also emits Release/Repeat).
-            if key.kind == KeyEventKind::Press {
-                let ctrl_c =
-                    key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL);
-                let action = match key.code {
-                    _ if ctrl_c => Some(KeyAction::Quit),
-                    KeyCode::Char('q') => Some(KeyAction::Quit),
-                    KeyCode::Char('s') => Some(KeyAction::CycleSort),
-                    KeyCode::Tab => Some(KeyAction::SwitchFocus),
-                    KeyCode::Up | KeyCode::Char('k') => Some(KeyAction::ScrollUp(1)),
-                    KeyCode::Down | KeyCode::Char('j') => Some(KeyAction::ScrollDown(1)),
-                    KeyCode::PageUp => Some(KeyAction::ScrollUp(PAGE)),
-                    KeyCode::PageDown => Some(KeyAction::ScrollDown(PAGE)),
-                    _ => None,
-                };
-                return Ok(action);
+/// How long the reader thread blocks per poll before re-checking the stop flag.
+const INPUT_POLL: Duration = Duration::from_millis(100);
+
+/// Map a crossterm key press to a [`KeyAction`], or `None` if it isn't one we
+/// handle.
+fn map_key(key: KeyEvent) -> Option<KeyAction> {
+    // Only react to presses (Windows also emits Release/Repeat).
+    if key.kind != KeyEventKind::Press {
+        return None;
+    }
+    let ctrl_c =
+        key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL);
+    match key.code {
+        _ if ctrl_c => Some(KeyAction::Quit),
+        KeyCode::Char('q') => Some(KeyAction::Quit),
+        KeyCode::Char('s') => Some(KeyAction::CycleSort),
+        KeyCode::Tab => Some(KeyAction::SwitchFocus),
+        KeyCode::Up | KeyCode::Char('k') => Some(KeyAction::ScrollUp(1)),
+        KeyCode::Down | KeyCode::Char('j') => Some(KeyAction::ScrollDown(1)),
+        KeyCode::PageUp => Some(KeyAction::ScrollUp(PAGE)),
+        KeyCode::PageDown => Some(KeyAction::ScrollDown(PAGE)),
+        _ => None,
+    }
+}
+
+/// Reader-thread loop: block on terminal input and forward each mapped action
+/// over `tx`. Returns when `stop` is set, the channel closes, or crossterm
+/// errors. Polling (rather than an unbounded `read`) lets it observe `stop`
+/// within [`INPUT_POLL`] even when no keys arrive.
+fn input_loop(tx: &mpsc::UnboundedSender<KeyAction>, stop: &AtomicBool) {
+    while !stop.load(Ordering::Relaxed) {
+        match event::poll(INPUT_POLL) {
+            Ok(true) => {
+                if let Ok(CtEvent::Key(key)) = event::read() {
+                    if let Some(action) = map_key(key) {
+                        if tx.send(action).is_err() {
+                            break; // receiver gone
+                        }
+                    }
+                }
             }
+            Ok(false) => {}
+            Err(_) => break,
         }
     }
-    Ok(None)
 }
