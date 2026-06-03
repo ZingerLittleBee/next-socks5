@@ -277,6 +277,19 @@ EOF
     pid="$($SUDO cat "$pidf" 2>/dev/null || true)"
     if [ -n "$pid" ] && $SUDO kill -0 "$pid" 2>/dev/null; then
       log "started (pid $pid)"
+      # Best-effort auto-start on reboot (systemd/OpenRC do this natively; bare
+      # nohup does not survive a reboot, so register an @reboot cron entry).
+      if command -v crontab >/dev/null 2>&1; then
+        cron_line="@reboot ${BIN_DIR}/${BIN_NAME} --no-tui --config /etc/next-socks5/config.toml >>${logf} 2>&1"
+        if { $SUDO crontab -l 2>/dev/null | grep -v 'next-socks5 --no-tui'; echo "$cron_line"; } | $SUDO crontab - 2>/dev/null; then
+          log "registered @reboot auto-start via cron (needs crond running)"
+        else
+          warn "could not register auto-start; the service will NOT survive a reboot"
+        fi
+      else
+        warn "no cron found: the service will NOT auto-start after a reboot"
+        warn "for durable setups use --method docker (restart policy) or a systemd/OpenRC host"
+      fi
       MANAGE_HINT="stop: $SUDO kill $pid  |  logs: $SUDO tail -f $logf"
     else
       err "next-socks5 failed to start; check $logf"
