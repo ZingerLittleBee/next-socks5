@@ -232,17 +232,17 @@ fn render_rate(frame: &mut Frame, area: Rect, state: &super::DashboardState) {
     // Left: current rates + totals as text. Right: up/down trend sparklines.
     let cols = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Length(34), Constraint::Min(12)])
+        .constraints([Constraint::Length(40), Constraint::Min(12)])
         .split(area);
 
     let text = vec![
         Line::from(format!(
-            "Up:   {:>8.1} KB/s    total {}",
+            "Up:   {:>8.1} KB/s  total {}",
             state.up_kbps,
             human_bytes(snap.bytes_up)
         )),
         Line::from(format!(
-            "Down: {:>8.1} KB/s    total {}",
+            "Down: {:>8.1} KB/s  total {}",
             state.down_kbps,
             human_bytes(snap.bytes_down)
         )),
