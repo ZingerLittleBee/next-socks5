@@ -1,6 +1,6 @@
-#!/usr/bin/env bash
+#!/bin/sh
 #
-# next-socks5 one-shot installer.
+# next-socks5 one-shot installer. POSIX sh (no bash required).
 #
 # Installs and starts a next-socks5 SOCKS5 server, either as a native binary
 # (downloaded from GitHub Releases + a systemd service) or via Docker Compose.
@@ -61,6 +61,11 @@ EOF
 }
 
 # --- Helpers ------------------------------------------------------------------
+# Clean up temp dirs on exit (sh has no function-scoped RETURN trap).
+_TMP=""
+cleanup() { [ -n "$_TMP" ] && rm -rf "$_TMP"; return 0; }
+trap cleanup EXIT INT TERM
+
 need_cmd() { command -v "$1" >/dev/null 2>&1 || err "required command not found: $1"; }
 
 # Run a command as root when not already root.
@@ -105,12 +110,22 @@ port_in_use() {
   fi
 }
 
+# Echo a pseudo-random integer in [20000, 40000) via /dev/urandom (sh has no $RANDOM).
+rand_port() {
+  local n
+  n="$(od -An -N2 -tu2 /dev/urandom 2>/dev/null | tr -d ' ')"
+  [ -n "$n" ] || n="$$"
+  echo $(( (n % 20000) + 20000 ))
+}
+
 # Pick a random free port in [20000, 40000).
 find_free_port() {
-  local p
-  for _ in $(seq 1 100); do
-    p=$(( (RANDOM % 20000) + 20000 ))
+  local p i
+  i=0
+  while [ "$i" -lt 100 ]; do
+    p="$(rand_port)"
     if ! port_in_use "$p"; then echo "$p"; return 0; fi
+    i=$((i + 1))
   done
   err "could not find a free port after 100 attempts"
 }
@@ -185,7 +200,7 @@ install_binary() {
   fi
 
   tmp="$(mktemp -d)"
-  trap 'rm -rf "$tmp"' RETURN
+  _TMP="$tmp"   # removed by the global EXIT trap (sh has no RETURN trap)
   log "downloading ${BIN_NAME} (${target}, ${VERSION})"
   curl -fL --retry 3 -o "$tmp/pkg.tar.gz" "$url" \
     || err "download failed: $url (is the release published yet?)"

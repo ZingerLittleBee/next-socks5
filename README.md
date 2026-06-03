@@ -38,11 +38,11 @@ port automatically, and starts the service.
 
 ```bash
 # Binary install, auth enabled with auto-generated user/password, random port:
-curl -fsSL https://raw.githubusercontent.com/zinger-labs/next-socks5/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/zinger-labs/next-socks5/main/install.sh | sh
 
-# With options (note the `-s --` to pass args through curl | bash):
+# With options (note the `-s --` to pass args through curl | sh):
 curl -fsSL https://raw.githubusercontent.com/zinger-labs/next-socks5/main/install.sh \
-  | bash -s -- --method docker --auth --port 1080
+  | sh -s -- --method docker --auth --port 1080
 ```
 
 Or clone and run locally:
