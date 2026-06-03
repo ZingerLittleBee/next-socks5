@@ -137,6 +137,9 @@ pub struct Cli {
     /// Override the admin socket path.
     #[arg(long)]
     pub admin_socket: Option<PathBuf>,
+    /// Feed the dashboard with synthetic data (demo only; no real traffic).
+    #[arg(long, hide = true)]
+    pub mock: bool,
 }
 
 /// Subcommands. With no subcommand, the server runs (default).
@@ -274,6 +277,7 @@ max_connections = 1024
             no_tui: false,
             no_admin: false,
             admin_socket: None,
+            mock: false,
         };
         apply_overrides(&mut cfg, &cli);
         assert_eq!(cfg.listen, "0.0.0.0:9999");
@@ -289,6 +293,7 @@ max_connections = 1024
             no_tui: false,
             no_admin: false,
             admin_socket: None,
+            mock: false,
         };
         apply_overrides(&mut cfg, &cli);
         assert_eq!(cfg.listen, "127.0.0.1:1080");
@@ -321,6 +326,7 @@ max_connections = 1024
             no_tui: false,
             no_admin: true,
             admin_socket: Some(PathBuf::from("/run/x.sock")),
+            mock: false,
         };
         apply_overrides(&mut cfg, &cli);
         assert!(!cfg.admin.enabled);

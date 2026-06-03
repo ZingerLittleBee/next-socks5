@@ -15,7 +15,7 @@ use tokio::sync::{broadcast, watch};
 use next_socks5::admin;
 use next_socks5::config::{AuthMethod, Cli, Command, Config, DEFAULT_ADMIN_SOCKET};
 use next_socks5::metrics::{format_event, Event, Metrics};
-use next_socks5::server;
+use next_socks5::{mock, server};
 #[cfg(feature = "tui")]
 use next_socks5::tui;
 
@@ -113,6 +113,16 @@ async fn main() {
                 eprintln!("admin endpoint disabled: {e}");
             }
         });
+    }
+
+    // 4c. Optionally feed the dashboard with synthetic data (demo only). It
+    //     drives the same metrics/event APIs as the proxy, no real traffic.
+    if cli.mock {
+        tokio::spawn(mock::run(
+            metrics.clone(),
+            events_tx.clone(),
+            shutdown_rx.clone(),
+        ));
     }
 
     // 5. Run the chosen front end. Each branch is responsible for flipping the
