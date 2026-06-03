@@ -303,6 +303,15 @@ pub fn rate_axis_labels(ymax_kbps: f64) -> Vec<String> {
     }
 }
 
+/// The RFC 1928 reply-code (0x01..=0x08) error bucket with the highest count,
+/// returned as `(code, count)`; `None` when no failures have a code yet.
+pub fn top_error(codes: &[u64; 9]) -> Option<(usize, u64)> {
+    (1..=8)
+        .map(|i| (i, codes[i]))
+        .filter(|&(_, c)| c > 0)
+        .max_by_key(|&(_, c)| c)
+}
+
 /// Success percentage of completed requests, e.g. `98.2%`; `--` when none yet.
 pub fn fmt_pct(ok: u64, fail: u64) -> String {
     let total = ok + fail;
@@ -598,6 +607,21 @@ fn render_stats(frame: &mut Frame, area: Rect, state: &super::DashboardState) {
         Span::styled(s, style)
     };
 
+    // Fourth line: call out the most common error code, or note a clean run.
+    let top_line = match top_error(&snap.error_codes) {
+        Some((code, count)) => Line::from(format!(
+            "top error  0x{:02x} {} ={} of {} failures",
+            code,
+            CODE_NAMES[code - 1],
+            count,
+            snap.failures,
+        ))
+        .style(Style::default().fg(Color::Yellow)),
+        None => {
+            Line::from("top error  none yet").style(Style::default().fg(Color::DarkGray))
+        }
+    };
+
     let text = vec![
         Line::from(format!(
             "conns total={}  active={}  ok={}  fail={}  ({})",
@@ -609,6 +633,7 @@ fn render_stats(frame: &mut Frame, area: Rect, state: &super::DashboardState) {
         )),
         Line::from((1..=4).map(code_span).collect::<Vec<Span>>()),
         Line::from((5..=8).map(code_span).collect::<Vec<Span>>()),
+        top_line,
     ];
     let block = Block::default().borders(Borders::ALL).title("Stats");
     frame.render_widget(Paragraph::new(text).block(block), area);
@@ -810,6 +835,15 @@ mod tests {
         assert_eq!(rate_axis_labels(40.0), vec!["", "20 KB/s", "40 KB/s"]);
         // Large range scales to MB/s with one decimal.
         assert_eq!(rate_axis_labels(1500.0), vec!["", "0.7 MB/s", "1.5 MB/s"]);
+    }
+
+    #[test]
+    fn top_error_picks_largest_bucket() {
+        // No errors yet.
+        assert_eq!(top_error(&[0; 9]), None);
+        // 0x03 has the most hits.
+        let codes = [0, 2, 1, 7, 3, 0, 0, 0, 0];
+        assert_eq!(top_error(&codes), Some((3, 7)));
     }
 
     #[test]
