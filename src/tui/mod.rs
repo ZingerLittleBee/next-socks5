@@ -23,13 +23,17 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 use tokio::sync::{broadcast, watch};
 
+use std::collections::HashMap;
+
 use crate::metrics::{ConnInfo, Event, MetricsSource, Snapshot};
-use widgets::LogRing;
+use widgets::{LogRing, RateHistory};
 
 /// How often the dashboard re-samples metrics and redraws.
 const TICK: Duration = Duration::from_millis(250);
 /// Maximum number of log lines retained in the scrolling panel.
 const LOG_CAPACITY: usize = 500;
+/// How many throughput samples the sparklines retain (~30s at 250ms/tick).
+const RATE_HISTORY: usize = 120;
 
 /// Snapshot of everything the renderer needs for a single frame.
 pub struct DashboardState {
@@ -39,10 +43,18 @@ pub struct DashboardState {
     pub up_kbps: f64,
     /// Current download throughput in KB/s.
     pub down_kbps: f64,
+    /// Recent upload-rate samples (KB/s) for the sparkline.
+    pub up_history: RateHistory,
+    /// Recent download-rate samples (KB/s) for the sparkline.
+    pub down_history: RateHistory,
     /// Scrolling log buffer.
     pub log: LogRing,
     /// Active connections at the last sample.
     pub connections: Vec<ConnInfo>,
+    /// First time each still-active connection id was observed, for age.
+    pub first_seen: HashMap<u64, Instant>,
+    /// When the dashboard started, for the uptime readout.
+    pub start: Instant,
     /// Optional listen address shown in the title bar.
     pub listen_addr: Option<String>,
 }
@@ -53,8 +65,12 @@ impl DashboardState {
             snapshot: Snapshot::default(),
             up_kbps: 0.0,
             down_kbps: 0.0,
+            up_history: RateHistory::new(RATE_HISTORY),
+            down_history: RateHistory::new(RATE_HISTORY),
             log: LogRing::new(LOG_CAPACITY),
             connections: Vec::new(),
+            first_seen: HashMap::new(),
+            start: Instant::now(),
             listen_addr,
         }
     }
@@ -130,6 +146,8 @@ pub async fn run(
                     widgets::rate_kbps(snap.bytes_up.saturating_sub(last_snapshot.bytes_up), dt);
                 state.down_kbps =
                     widgets::rate_kbps(snap.bytes_down.saturating_sub(last_snapshot.bytes_down), dt);
+                state.up_history.push(state.up_kbps as u64);
+                state.down_history.push(state.down_kbps as u64);
 
                 // Drain whatever events are pending without blocking.
                 drain_events(&mut events, &mut state.log);
@@ -137,6 +155,15 @@ pub async fn run(
                 state.connections = source.connections();
                 state.connections.sort_by_key(|c| c.id);
                 state.snapshot = snap.clone();
+
+                // Track when each connection was first observed (for age) and
+                // forget ids that are no longer active.
+                for c in &state.connections {
+                    state.first_seen.entry(c.id).or_insert(now);
+                }
+                state
+                    .first_seen
+                    .retain(|id, _| state.connections.iter().any(|c| c.id == *id));
 
                 last_snapshot = snap;
                 last_instant = now;
@@ -173,11 +200,14 @@ pub async fn run(
 fn drain_events(events: &mut broadcast::Receiver<Event>, log: &mut LogRing) {
     loop {
         match events.try_recv() {
-            Ok(ev) => log.push(crate::metrics::format_event(&ev)),
+            Ok(ev) => log.push(widgets::severity_of(&ev), crate::metrics::format_event(&ev)),
             Err(broadcast::error::TryRecvError::Empty)
             | Err(broadcast::error::TryRecvError::Closed) => break,
             Err(broadcast::error::TryRecvError::Lagged(n)) => {
-                log.push(format!("(log lagged, dropped {n} events)"));
+                log.push(
+                    widgets::Severity::Warn,
+                    format!("(log lagged, dropped {n} events)"),
+                );
             }
         }
     }

@@ -7,15 +7,15 @@
 //! binary, not by unit tests.
 
 use std::collections::VecDeque;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::Line;
-use ratatui::widgets::{Block, Borders, Cell, List, ListItem, Paragraph, Row, Table};
+use ratatui::widgets::{Block, Borders, Cell, List, ListItem, Paragraph, Row, Sparkline, Table};
 use ratatui::Frame;
 
-use crate::metrics::ConnKind;
+use crate::metrics::{ConnKind, Event};
 
 /// Compute throughput in KB/s from a byte delta over an elapsed duration.
 ///
@@ -28,12 +28,60 @@ pub fn rate_kbps(bytes_delta: u64, dt: Duration) -> f64 {
     (bytes_delta as f64 / 1024.0) / secs
 }
 
+/// Severity of a log line, used to colour the log panel.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Severity {
+    /// Routine activity (connect, auth ok, free-form log).
+    Info,
+    /// Low-signal lifecycle noise (connection closed) — rendered dimmed.
+    Dim,
+    /// Something the operator may care about (auth failure, dropped logs).
+    Warn,
+    /// A request/relay error.
+    Error,
+}
+
+impl Severity {
+    /// The style used to render a line of this severity.
+    fn style(self) -> Style {
+        match self {
+            Severity::Info => Style::default(),
+            Severity::Dim => Style::default().fg(Color::DarkGray),
+            Severity::Warn => Style::default().fg(Color::Yellow),
+            Severity::Error => Style::default().fg(Color::Red),
+        }
+    }
+}
+
+/// Classify an [`Event`] into a log [`Severity`].
+pub fn severity_of(ev: &Event) -> Severity {
+    match ev {
+        Event::Connect { .. } | Event::Log(_) => Severity::Info,
+        Event::Closed { .. } => Severity::Dim,
+        Event::Auth { ok, .. } => {
+            if *ok {
+                Severity::Info
+            } else {
+                Severity::Warn
+            }
+        }
+        Event::Error { .. } => Severity::Error,
+    }
+}
+
+/// One stored log line: its rendered text plus a severity for colouring.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LogLine {
+    pub severity: Severity,
+    pub text: String,
+}
+
 /// Fixed-capacity log ring buffer.
 ///
 /// `push` appends a line; when already at capacity the oldest entry is dropped.
 /// [`lines`](LogRing::lines) yields the current entries oldest -> newest.
 pub struct LogRing {
-    buf: VecDeque<String>,
+    buf: VecDeque<LogLine>,
     cap: usize,
 }
 
@@ -47,12 +95,13 @@ impl LogRing {
         }
     }
 
-    /// Append a line, dropping the oldest entry when at capacity.
-    pub fn push(&mut self, line: String) {
+    /// Append a line with the given severity, dropping the oldest when at
+    /// capacity.
+    pub fn push(&mut self, severity: Severity, text: String) {
         if self.buf.len() == self.cap {
             self.buf.pop_front();
         }
-        self.buf.push_back(line);
+        self.buf.push_back(LogLine { severity, text });
     }
 
     /// Number of lines currently stored.
@@ -66,8 +115,57 @@ impl LogRing {
     }
 
     /// Iterate the current lines oldest -> newest.
-    pub fn lines(&self) -> impl Iterator<Item = &String> {
+    pub fn lines(&self) -> impl Iterator<Item = &LogLine> {
         self.buf.iter()
+    }
+}
+
+/// Fixed-capacity ring of recent per-tick throughput samples (KB/s), feeding
+/// the throughput sparklines. Oldest samples drop off the front.
+pub struct RateHistory {
+    buf: VecDeque<u64>,
+    cap: usize,
+}
+
+impl RateHistory {
+    /// Create a history retaining at most `cap` samples (clamped to >= 1).
+    pub fn new(cap: usize) -> Self {
+        Self {
+            buf: VecDeque::with_capacity(cap),
+            cap: cap.max(1),
+        }
+    }
+
+    /// Append a sample, dropping the oldest when at capacity.
+    pub fn push(&mut self, sample: u64) {
+        if self.buf.len() == self.cap {
+            self.buf.pop_front();
+        }
+        self.buf.push_back(sample);
+    }
+
+    /// Current samples, oldest -> newest.
+    pub fn samples(&self) -> Vec<u64> {
+        self.buf.iter().copied().collect()
+    }
+}
+
+/// Format a duration as `H:MM:SS` (hours uncapped), used for uptime.
+pub fn fmt_hms(d: Duration) -> String {
+    let s = d.as_secs();
+    format!("{}:{:02}:{:02}", s / 3600, (s % 3600) / 60, s % 60)
+}
+
+/// Format a connection age compactly for the narrow table column:
+/// `<60s` -> `12s`, `<60m` -> `3m`, otherwise `1h2m`.
+pub fn fmt_age(d: Duration) -> String {
+    let s = d.as_secs();
+    if s < 60 {
+        format!("{s}s")
+    } else if s < 3600 {
+        format!("{}m", s / 60)
+    } else {
+        format!("{}h{}m", s / 3600, (s % 3600) / 60)
     }
 }
 
@@ -97,7 +195,7 @@ pub fn render(frame: &mut Frame, state: &super::DashboardState) {
         .direction(Direction::Vertical)
         .constraints([
             Constraint::Length(1), // title bar
-            Constraint::Length(4), // rate panel
+            Constraint::Length(6), // rate panel (text + sparklines)
             Constraint::Min(6),    // connections table
             Constraint::Length(6), // stats panel
             Constraint::Min(5),    // log panel
@@ -112,9 +210,13 @@ pub fn render(frame: &mut Frame, state: &super::DashboardState) {
 }
 
 fn render_title(frame: &mut Frame, area: Rect, state: &super::DashboardState) {
+    let up = fmt_hms(state.start.elapsed());
+    let active = state.snapshot.active_conns;
     let title = match &state.listen_addr {
-        Some(addr) => format!(" next-socks5  -  listening on {addr}  (press q to quit) "),
-        None => " next-socks5  (press q to quit) ".to_string(),
+        Some(addr) => {
+            format!(" next-socks5  -  {addr}  -  up {up}  -  active {active}  -  q:quit ")
+        }
+        None => format!(" next-socks5  -  up {up}  -  active {active}  -  q:quit "),
     };
     let p = Paragraph::new(title).style(
         Style::default()
@@ -127,6 +229,12 @@ fn render_title(frame: &mut Frame, area: Rect, state: &super::DashboardState) {
 
 fn render_rate(frame: &mut Frame, area: Rect, state: &super::DashboardState) {
     let snap = &state.snapshot;
+    // Left: current rates + totals as text. Right: up/down trend sparklines.
+    let cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Length(34), Constraint::Min(12)])
+        .split(area);
+
     let text = vec![
         Line::from(format!(
             "Up:   {:>8.1} KB/s    total {}",
@@ -140,10 +248,26 @@ fn render_rate(frame: &mut Frame, area: Rect, state: &super::DashboardState) {
         )),
     ];
     let block = Block::default().borders(Borders::ALL).title("Throughput");
-    frame.render_widget(Paragraph::new(text).block(block), area);
+    frame.render_widget(Paragraph::new(text).block(block), cols[0]);
+
+    let trend = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(cols[1]);
+    let up = Sparkline::default()
+        .block(Block::default().borders(Borders::ALL).title("Up KB/s"))
+        .data(state.up_history.samples())
+        .style(Style::default().fg(Color::Green));
+    let down = Sparkline::default()
+        .block(Block::default().borders(Borders::ALL).title("Down KB/s"))
+        .data(state.down_history.samples())
+        .style(Style::default().fg(Color::Cyan));
+    frame.render_widget(up, trend[0]);
+    frame.render_widget(down, trend[1]);
 }
 
 fn render_connections(frame: &mut Frame, area: Rect, state: &super::DashboardState) {
+    let now = Instant::now();
     let header = Row::new(vec![
         Cell::from("ID"),
         Cell::from("Source"),
@@ -151,17 +275,33 @@ fn render_connections(frame: &mut Frame, area: Rect, state: &super::DashboardSta
         Cell::from("Kind"),
         Cell::from("Up"),
         Cell::from("Down"),
+        Cell::from("Age"),
     ])
     .style(Style::default().add_modifier(Modifier::BOLD));
 
-    let rows: Vec<Row> = state
+    // Rows that fit = area height minus the two borders and the header row.
+    let total = state.connections.len();
+    let avail = area.height.saturating_sub(3) as usize;
+    let show = if total > avail && avail >= 1 {
+        avail - 1 // reserve one row for the "+N more" marker
+    } else {
+        total
+    };
+
+    let mut rows: Vec<Row> = state
         .connections
         .iter()
+        .take(show)
         .map(|c| {
             let kind = match c.kind {
                 ConnKind::Connect => "CONNECT",
                 ConnKind::Udp => "UDP",
             };
+            let age = state
+                .first_seen
+                .get(&c.id)
+                .map(|t| fmt_age(now.duration_since(*t)))
+                .unwrap_or_default();
             Row::new(vec![
                 Cell::from(c.id.to_string()),
                 Cell::from(c.src.to_string()),
@@ -169,19 +309,27 @@ fn render_connections(frame: &mut Frame, area: Rect, state: &super::DashboardSta
                 Cell::from(kind.to_string()),
                 Cell::from(human_bytes(c.up)),
                 Cell::from(human_bytes(c.down)),
+                Cell::from(age),
             ])
         })
         .collect();
+    if show < total {
+        rows.push(
+            Row::new(vec![Cell::from(format!("… +{} more", total - show))])
+                .style(Style::default().fg(Color::DarkGray)),
+        );
+    }
 
     let widths = [
         Constraint::Length(6),
         Constraint::Percentage(25),
         Constraint::Percentage(30),
         Constraint::Length(8),
-        Constraint::Length(12),
-        Constraint::Length(12),
+        Constraint::Length(11),
+        Constraint::Length(11),
+        Constraint::Length(7),
     ];
-    let title = format!("Active connections ({})", state.connections.len());
+    let title = format!("Active connections ({total})");
     let table = Table::new(rows, widths)
         .header(header)
         .block(Block::default().borders(Borders::ALL).title(title));
@@ -221,11 +369,11 @@ fn render_log(frame: &mut Frame, area: Rect, state: &super::DashboardState) {
     // Show the most recent lines that fit; List renders top -> bottom so we
     // take the tail of the (oldest -> newest) ring.
     let capacity = area.height.saturating_sub(2) as usize; // minus borders
-    let lines: Vec<&String> = state.log.lines().collect();
+    let lines: Vec<&LogLine> = state.log.lines().collect();
     let start = lines.len().saturating_sub(capacity.max(1));
     let items: Vec<ListItem> = lines[start..]
         .iter()
-        .map(|s| ListItem::new(Line::from(s.as_str())))
+        .map(|l| ListItem::new(l.text.as_str()).style(l.severity.style()))
         .collect();
     let block = Block::default().borders(Borders::ALL).title("Log");
     frame.render_widget(List::new(items).block(block), area);
@@ -254,26 +402,77 @@ mod tests {
     #[test]
     fn logring_drops_oldest_at_capacity() {
         let mut ring = LogRing::new(3);
-        ring.push("a".into());
-        ring.push("b".into());
-        ring.push("c".into());
-        ring.push("d".into());
+        for t in ["a", "b", "c", "d"] {
+            ring.push(Severity::Info, t.into());
+        }
         assert_eq!(ring.len(), 3);
-        let lines: Vec<&String> = ring.lines().collect();
-        assert_eq!(
-            lines,
-            vec![&"b".to_string(), &"c".to_string(), &"d".to_string()]
-        );
+        let texts: Vec<&str> = ring.lines().map(|l| l.text.as_str()).collect();
+        assert_eq!(texts, vec!["b", "c", "d"]);
     }
 
     #[test]
     fn logring_within_capacity_preserves_order() {
         let mut ring = LogRing::new(5);
         assert!(ring.is_empty());
-        ring.push("one".into());
-        ring.push("two".into());
+        ring.push(Severity::Info, "one".into());
+        ring.push(Severity::Warn, "two".into());
         assert_eq!(ring.len(), 2);
-        let lines: Vec<&String> = ring.lines().collect();
-        assert_eq!(lines, vec![&"one".to_string(), &"two".to_string()]);
+        let lines: Vec<(Severity, &str)> =
+            ring.lines().map(|l| (l.severity, l.text.as_str())).collect();
+        assert_eq!(
+            lines,
+            vec![(Severity::Info, "one"), (Severity::Warn, "two")]
+        );
+    }
+
+    #[test]
+    fn severity_classifies_events() {
+        use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+        let src = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 1080);
+        assert_eq!(
+            severity_of(&Event::Connect {
+                id: 1,
+                src,
+                target: "x:80".into(),
+                kind: ConnKind::Connect
+            }),
+            Severity::Info
+        );
+        assert_eq!(severity_of(&Event::Closed { id: 1 }), Severity::Dim);
+        assert_eq!(
+            severity_of(&Event::Auth { ok: true, user: "a".into() }),
+            Severity::Info
+        );
+        assert_eq!(
+            severity_of(&Event::Auth { ok: false, user: "a".into() }),
+            Severity::Warn
+        );
+        assert_eq!(
+            severity_of(&Event::Error { code: 5, msg: "x".into() }),
+            Severity::Error
+        );
+    }
+
+    #[test]
+    fn rate_history_caps_and_orders() {
+        let mut h = RateHistory::new(3);
+        for v in [1, 2, 3, 4] {
+            h.push(v);
+        }
+        assert_eq!(h.samples(), vec![2, 3, 4]);
+    }
+
+    #[test]
+    fn fmt_hms_formats_hours_minutes_seconds() {
+        assert_eq!(fmt_hms(Duration::from_secs(0)), "0:00:00");
+        assert_eq!(fmt_hms(Duration::from_secs(75)), "0:01:15");
+        assert_eq!(fmt_hms(Duration::from_secs(3661)), "1:01:01");
+    }
+
+    #[test]
+    fn fmt_age_is_compact() {
+        assert_eq!(fmt_age(Duration::from_secs(12)), "12s");
+        assert_eq!(fmt_age(Duration::from_secs(185)), "3m");
+        assert_eq!(fmt_age(Duration::from_secs(3720)), "1h2m");
     }
 }
