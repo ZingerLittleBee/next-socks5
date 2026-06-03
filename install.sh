@@ -243,9 +243,20 @@ EOF
     $SUDO systemctl enable --now next-socks5.service
     MANAGE_HINT="systemctl status next-socks5 | journalctl -u next-socks5 -f"
   else
-    warn "systemd not detected; start manually with:"
-    warn "  ${BIN_DIR}/${BIN_NAME} --no-tui --config /etc/next-socks5/config.toml"
-    MANAGE_HINT="run the command above"
+    # No systemd (e.g. containers): start in the background with nohup.
+    local logf pidf pid
+    logf="/var/log/next-socks5.log"; pidf="/var/run/next-socks5.pid"
+    $SUDO sh -c ": >> '$logf'" 2>/dev/null || { logf="/tmp/next-socks5.log"; pidf="/tmp/next-socks5.pid"; }
+    log "systemd not found; starting in the background (nohup)"
+    $SUDO sh -c "nohup '${BIN_DIR}/${BIN_NAME}' --no-tui --config /etc/next-socks5/config.toml >'$logf' 2>&1 </dev/null & echo \$! > '$pidf'"
+    sleep 1
+    pid="$($SUDO cat "$pidf" 2>/dev/null || true)"
+    if [ -n "$pid" ] && $SUDO kill -0 "$pid" 2>/dev/null; then
+      log "started (pid $pid)"
+      MANAGE_HINT="stop: $SUDO kill $pid  |  logs: $SUDO tail -f $logf"
+    else
+      err "next-socks5 failed to start; check $logf"
+    fi
   fi
 }
 
