@@ -26,12 +26,12 @@ use tokio::sync::{broadcast, watch};
 use std::collections::HashMap;
 
 use crate::metrics::{ConnInfo, Event, MetricsSource, Snapshot};
-use widgets::{LogRing, RateHistory};
+use widgets::{Focus, LogRing, RateHistory, SortKey};
 
 /// How often the dashboard re-samples metrics and redraws.
 const TICK: Duration = Duration::from_millis(250);
-/// Maximum number of log lines retained in the scrolling panel.
-const LOG_CAPACITY: usize = 500;
+/// Maximum number of log lines retained for scrollback.
+const LOG_CAPACITY: usize = 1000;
 /// How many throughput samples the sparklines retain (~30s at 250ms/tick).
 const RATE_HISTORY: usize = 120;
 
@@ -57,6 +57,15 @@ pub struct DashboardState {
     pub start: Instant,
     /// Optional listen address shown in the title bar.
     pub listen_addr: Option<String>,
+    /// Current connection-table sort order.
+    pub sort: SortKey,
+    /// Which panel the scroll keys act on.
+    pub focus: Focus,
+    /// Scroll offset (rows from the top) of the connections table.
+    pub conn_scroll: usize,
+    /// Scroll offset (lines from the top) of the log panel. `0` keeps the view
+    /// pinned to the newest line (tailing).
+    pub log_scroll: usize,
 }
 
 impl DashboardState {
@@ -72,6 +81,10 @@ impl DashboardState {
             first_seen: HashMap::new(),
             start: Instant::now(),
             listen_addr,
+            sort: SortKey::Id,
+            focus: Focus::Connections,
+            conn_scroll: 0,
+            log_scroll: 0,
         }
     }
 }
@@ -149,21 +162,31 @@ pub async fn run(
                 state.up_history.push(state.up_kbps as u64);
                 state.down_history.push(state.down_kbps as u64);
 
-                // Drain whatever events are pending without blocking.
-                drain_events(&mut events, &mut state.log);
+                // Drain whatever events are pending without blocking. When the
+                // user has scrolled the log up (not tailing), keep their view
+                // anchored on the same lines by pushing the offset down by the
+                // number of lines just appended.
+                let added = drain_events(&mut events, &mut state.log);
+                if state.log_scroll > 0 {
+                    let avail = panel_avail(terminal.size()?.height).1;
+                    let max_off = state.log.len().saturating_sub(avail);
+                    state.log_scroll = (state.log_scroll + added).min(max_off);
+                }
 
-                state.connections = source.connections();
-                state.connections.sort_by_key(|c| c.id);
                 state.snapshot = snap.clone();
 
                 // Track when each connection was first observed (for age) and
-                // forget ids that are no longer active.
-                for c in &state.connections {
+                // forget ids that are no longer active, then sort by the chosen
+                // key (age needs the freshly-updated first_seen map).
+                let mut conns = source.connections();
+                for c in &conns {
                     state.first_seen.entry(c.id).or_insert(now);
                 }
                 state
                     .first_seen
-                    .retain(|id, _| state.connections.iter().any(|c| c.id == *id));
+                    .retain(|id, _| conns.iter().any(|c| c.id == *id));
+                widgets::sort_connections(&mut conns, state.sort, &state.first_seen);
+                state.connections = conns;
 
                 last_snapshot = snap;
                 last_instant = now;
@@ -174,12 +197,13 @@ pub async fn run(
             // Key input: poll on a blocking thread so we never stall the runtime.
             res = tokio::task::spawn_blocking(poll_key) => {
                 if let Ok(Ok(Some(action))) = res {
-                    match action {
-                        KeyAction::Quit => {
-                            let _ = shutdown_tx.send(true);
-                            break;
-                        }
+                    if matches!(action, KeyAction::Quit) {
+                        let _ = shutdown_tx.send(true);
+                        break;
                     }
+                    let (conn_avail, log_avail) = panel_avail(terminal.size()?.height);
+                    apply_action(&mut state, action, conn_avail, log_avail);
+                    terminal.draw(|f| widgets::render(f, &state))?;
                 }
             }
 
@@ -196,8 +220,11 @@ pub async fn run(
 }
 
 /// Drain all currently-queued events into the log ring, recording lag if the
-/// receiver fell behind the broadcast channel.
-fn drain_events(events: &mut broadcast::Receiver<Event>, log: &mut LogRing) {
+/// receiver fell behind the broadcast channel. Returns the number of lines
+/// appended (in-place "closed" updates do not count) so the caller can keep a
+/// scrolled-up log view anchored.
+fn drain_events(events: &mut broadcast::Receiver<Event>, log: &mut LogRing) -> usize {
+    let mut added = 0;
     loop {
         match events.try_recv() {
             // A close updates the connection's existing line in place rather
@@ -213,6 +240,7 @@ fn drain_events(events: &mut broadcast::Receiver<Event>, log: &mut LogRing) {
                     crate::metrics::format_event(&ev),
                     conn_id,
                 );
+                added += 1;
             }
             Err(broadcast::error::TryRecvError::Empty)
             | Err(broadcast::error::TryRecvError::Closed) => break,
@@ -222,18 +250,69 @@ fn drain_events(events: &mut broadcast::Receiver<Event>, log: &mut LogRing) {
                     format!("(log lagged, dropped {n} events)"),
                     None,
                 );
+                added += 1;
             }
         }
     }
+    added
 }
 
-/// Result of polling for a key the dashboard cares about.
+/// Number of data rows the connections table and log panel can show, derived
+/// from the terminal height: the title bar (1) and info band sit above the main
+/// row, the table loses two borders plus a header, the log loses two borders.
+fn panel_avail(term_height: u16) -> (usize, usize) {
+    let main = term_height.saturating_sub(1 + widgets::INFO_BAND_HEIGHT);
+    let conn = main.saturating_sub(3) as usize;
+    let log = main.saturating_sub(2) as usize;
+    (conn, log)
+}
+
+/// Apply a non-quit key action to the dashboard state, clamping scroll offsets
+/// against the panel sizes so over-scrolling settles at the edge.
+fn apply_action(state: &mut DashboardState, action: KeyAction, conn_avail: usize, log_avail: usize) {
+    let conn_max = state.connections.len().saturating_sub(conn_avail.max(1));
+    let log_max = state.log.len().saturating_sub(log_avail.max(1));
+    match action {
+        // Already handled by the caller; kept exhaustive for clarity.
+        KeyAction::Quit => {}
+        KeyAction::CycleSort => {
+            state.sort = state.sort.next();
+            state.conn_scroll = 0;
+        }
+        KeyAction::SwitchFocus => state.focus = state.focus.next(),
+        // Connections scroll from the top (down = toward the end); the log
+        // scrolls from the bottom (up = toward older lines, away from the tail).
+        KeyAction::ScrollUp(n) => match state.focus {
+            Focus::Connections => state.conn_scroll = state.conn_scroll.saturating_sub(n),
+            Focus::Log => state.log_scroll = (state.log_scroll + n).min(log_max),
+        },
+        KeyAction::ScrollDown(n) => match state.focus {
+            Focus::Connections => state.conn_scroll = (state.conn_scroll + n).min(conn_max),
+            Focus::Log => state.log_scroll = state.log_scroll.saturating_sub(n),
+        },
+    }
+}
+
+/// A key the dashboard reacts to. Scroll variants carry their line count so the
+/// same handler serves both arrow keys (1) and Page Up/Down (one screen).
 enum KeyAction {
     Quit,
+    /// Cycle the connection-table sort order.
+    CycleSort,
+    /// Move focus between the connections table and the log.
+    SwitchFocus,
+    /// Scroll the focused panel up by `n` lines (toward older content).
+    ScrollUp(usize),
+    /// Scroll the focused panel down by `n` lines (toward newer content).
+    ScrollDown(usize),
 }
 
-/// Poll crossterm for a key event for up to one tick. Returns `Some(Quit)` for
-/// `q` or Ctrl-C, `None` otherwise. Runs on a blocking thread.
+/// One screen's worth of lines for Page Up / Page Down.
+const PAGE: usize = 10;
+
+/// Poll crossterm for a key event for up to one tick, mapping it to a
+/// [`KeyAction`]. Returns `None` when the key isn't one we handle. Runs on a
+/// blocking thread.
 fn poll_key() -> io::Result<Option<KeyAction>> {
     if event::poll(TICK)? {
         if let CtEvent::Key(key) = event::read()? {
@@ -241,9 +320,18 @@ fn poll_key() -> io::Result<Option<KeyAction>> {
             if key.kind == KeyEventKind::Press {
                 let ctrl_c =
                     key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL);
-                if key.code == KeyCode::Char('q') || ctrl_c {
-                    return Ok(Some(KeyAction::Quit));
-                }
+                let action = match key.code {
+                    _ if ctrl_c => Some(KeyAction::Quit),
+                    KeyCode::Char('q') => Some(KeyAction::Quit),
+                    KeyCode::Char('s') => Some(KeyAction::CycleSort),
+                    KeyCode::Tab => Some(KeyAction::SwitchFocus),
+                    KeyCode::Up | KeyCode::Char('k') => Some(KeyAction::ScrollUp(1)),
+                    KeyCode::Down | KeyCode::Char('j') => Some(KeyAction::ScrollDown(1)),
+                    KeyCode::PageUp => Some(KeyAction::ScrollUp(PAGE)),
+                    KeyCode::PageDown => Some(KeyAction::ScrollDown(PAGE)),
+                    _ => None,
+                };
+                return Ok(action);
             }
         }
     }

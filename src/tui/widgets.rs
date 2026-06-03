@@ -6,7 +6,7 @@
 //! draws those values onto a [`ratatui::Frame`] and is exercised by running the
 //! binary, not by unit tests.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 
 use ratatui::layout::{Constraint, Direction, Layout, Rect};
@@ -18,7 +18,93 @@ use ratatui::widgets::{
 };
 use ratatui::Frame;
 
-use crate::metrics::{ConnKind, Event};
+use crate::metrics::{ConnInfo, ConnKind, Event};
+
+/// Height of the info band (Throughput/Stats + Trend chart). Shared so the
+/// key-scroll handler can work out how many rows the main panels show.
+pub const INFO_BAND_HEIGHT: u16 = 13;
+
+/// Sort order for the active-connections table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SortKey {
+    /// Connection id, ascending (insertion order).
+    Id,
+    /// Upload bytes, descending.
+    Up,
+    /// Download bytes, descending.
+    Down,
+    /// Age, oldest first.
+    Age,
+}
+
+impl SortKey {
+    /// Cycle to the next sort key (Id -> Up -> Down -> Age -> Id).
+    pub fn next(self) -> SortKey {
+        match self {
+            SortKey::Id => SortKey::Up,
+            SortKey::Up => SortKey::Down,
+            SortKey::Down => SortKey::Age,
+            SortKey::Age => SortKey::Id,
+        }
+    }
+
+    /// Short label for the table title, including the sort direction arrow.
+    pub fn label(self) -> &'static str {
+        match self {
+            SortKey::Id => "id",
+            SortKey::Up => "up↓",
+            SortKey::Down => "down↓",
+            SortKey::Age => "age↓",
+        }
+    }
+}
+
+/// Which panel the scroll keys act on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Focus {
+    Connections,
+    Log,
+}
+
+impl Focus {
+    /// Toggle focus between the two scrollable panels.
+    pub fn next(self) -> Focus {
+        match self {
+            Focus::Connections => Focus::Log,
+            Focus::Log => Focus::Connections,
+        }
+    }
+}
+
+/// Sort `conns` in place by `sort` (age uses `first_seen` for each id; ties
+/// break by id so the order is stable).
+pub fn sort_connections(conns: &mut [ConnInfo], sort: SortKey, first_seen: &HashMap<u64, Instant>) {
+    match sort {
+        SortKey::Id => conns.sort_by_key(|c| c.id),
+        SortKey::Up => conns.sort_by(|a, b| b.up.cmp(&a.up).then(a.id.cmp(&b.id))),
+        SortKey::Down => conns.sort_by(|a, b| b.down.cmp(&a.down).then(a.id.cmp(&b.id))),
+        // Oldest first: earlier `first_seen` Instant sorts before later ones.
+        SortKey::Age => conns.sort_by(|a, b| {
+            first_seen
+                .get(&a.id)
+                .cmp(&first_seen.get(&b.id))
+                .then(a.id.cmp(&b.id))
+        }),
+    }
+}
+
+/// Compute the visible window for a scrollable list.
+///
+/// Given `total` items, `avail` visible rows and a desired top `offset`,
+/// returns `(start, shown, above, below)`: the clamped start index, how many
+/// rows are shown, and how many items are hidden above and below.
+pub fn scroll_window(total: usize, avail: usize, offset: usize) -> (usize, usize, usize, usize) {
+    let avail = avail.max(1);
+    let max_off = total.saturating_sub(avail);
+    let start = offset.min(max_off);
+    let shown = avail.min(total - start);
+    (start, shown, start, total - start - shown)
+}
 
 /// Compute throughput in KB/s from a byte delta over an elapsed duration.
 ///
@@ -301,11 +387,12 @@ pub fn render(frame: &mut Frame, state: &super::DashboardState) {
 fn render_title(frame: &mut Frame, area: Rect, state: &super::DashboardState) {
     let up = fmt_hms(state.start.elapsed());
     let active = state.snapshot.active_conns;
+    const KEYS: &str = "tab:focus s:sort ↑↓/jk:scroll q:quit";
     let title = match &state.listen_addr {
         Some(addr) => {
-            format!(" next-socks5  -  {addr}  -  up {up}  -  active {active}  -  q:quit ")
+            format!(" next-socks5  -  {addr}  -  up {up}  -  active {active}  -  {KEYS} ")
         }
-        None => format!(" next-socks5  -  up {up}  -  active {active}  -  q:quit "),
+        None => format!(" next-socks5  -  up {up}  -  active {active}  -  {KEYS} "),
     };
     let p = Paragraph::new(title).style(
         Style::default()
@@ -412,19 +499,16 @@ fn render_connections(frame: &mut Frame, area: Rect, state: &super::DashboardSta
     ])
     .style(Style::default().add_modifier(Modifier::BOLD));
 
-    // Rows that fit = area height minus the two borders and the header row.
+    // Window the rows: body rows = area height minus the two borders and header.
     let total = state.connections.len();
     let avail = area.height.saturating_sub(3) as usize;
-    let show = if total > avail && avail >= 1 {
-        avail - 1 // reserve one row for the "+N more" marker
-    } else {
-        total
-    };
+    let (start, shown, above, below) = scroll_window(total, avail, state.conn_scroll);
 
-    let mut rows: Vec<Row> = state
+    let rows: Vec<Row> = state
         .connections
         .iter()
-        .take(show)
+        .skip(start)
+        .take(shown)
         .map(|c| {
             let kind = match c.kind {
                 ConnKind::Connect => "CONNECT",
@@ -446,12 +530,6 @@ fn render_connections(frame: &mut Frame, area: Rect, state: &super::DashboardSta
             ])
         })
         .collect();
-    if show < total {
-        rows.push(
-            Row::new(vec![Cell::from(format!("… +{} more", total - show))])
-                .style(Style::default().fg(Color::DarkGray)),
-        );
-    }
 
     let widths = [
         Constraint::Length(6),
@@ -462,11 +540,37 @@ fn render_connections(frame: &mut Frame, area: Rect, state: &super::DashboardSta
         Constraint::Length(11),
         Constraint::Length(7),
     ];
-    let title = format!("Active connections ({total})");
+    let focused = state.focus == Focus::Connections;
+    let title = format!(
+        "Active connections ({total})  sort:{}{}",
+        state.sort.label(),
+        scroll_hint(above, below),
+    );
     let table = Table::new(rows, widths)
         .header(header)
-        .block(Block::default().borders(Borders::ALL).title(title));
+        .block(panel_block(title, focused));
     frame.render_widget(table, area);
+}
+
+/// A `↑N ↓M` hint showing how many rows are hidden above/below the window, or
+/// an empty string when everything fits.
+fn scroll_hint(above: usize, below: usize) -> String {
+    if above == 0 && below == 0 {
+        String::new()
+    } else {
+        format!("  ↑{above} ↓{below}")
+    }
+}
+
+/// A panel border block whose border is highlighted (cyan + bold title) when
+/// the panel currently has scroll focus.
+fn panel_block(title: String, focused: bool) -> Block<'static> {
+    let block = Block::default().borders(Borders::ALL).title(title);
+    if focused {
+        block.border_style(Style::default().fg(Color::Cyan).add_modifier(Modifier::BOLD))
+    } else {
+        block
+    }
 }
 
 fn render_stats(frame: &mut Frame, area: Rect, state: &super::DashboardState) {
@@ -511,17 +615,24 @@ fn render_stats(frame: &mut Frame, area: Rect, state: &super::DashboardState) {
 }
 
 fn render_log(frame: &mut Frame, area: Rect, state: &super::DashboardState) {
-    // Show the most recent lines that fit; List renders top -> bottom so we
-    // take the tail of the (oldest -> newest) ring.
-    let capacity = area.height.saturating_sub(2) as usize; // minus borders
+    // The log scrolls from the bottom: `log_scroll` counts lines back from the
+    // newest. Convert that to a top offset for the shared windowing helper, so
+    // `log_scroll == 0` tails the newest line.
+    let avail = area.height.saturating_sub(2) as usize; // minus borders
     let lines: Vec<&LogLine> = state.log.lines().collect();
-    let start = lines.len().saturating_sub(capacity.max(1));
-    let items: Vec<ListItem> = lines[start..]
+    let total = lines.len();
+    let max_off = total.saturating_sub(avail.max(1));
+    let top_off = max_off.saturating_sub(state.log_scroll);
+    let (start, shown, above, below) = scroll_window(total, avail, top_off);
+
+    let items: Vec<ListItem> = lines[start..start + shown]
         .iter()
         .map(|l| ListItem::new(l.text.as_str()).style(l.severity.style()))
         .collect();
-    let block = Block::default().borders(Borders::ALL).title("Log");
-    frame.render_widget(List::new(items).block(block), area);
+
+    let focused = state.focus == Focus::Log;
+    let title = format!("Log ({total}){}", scroll_hint(above, below));
+    frame.render_widget(List::new(items).block(panel_block(title, focused)), area);
 }
 
 #[cfg(test)]
@@ -643,6 +754,52 @@ mod tests {
             h.push(v);
         }
         assert_eq!(h.peak(), 9);
+    }
+
+    #[test]
+    fn scroll_window_clamps_and_counts() {
+        // Top of a long list.
+        assert_eq!(scroll_window(100, 20, 0), (0, 20, 0, 80));
+        // Scrolled down a bit.
+        assert_eq!(scroll_window(100, 20, 5), (5, 20, 5, 75));
+        // Over-scrolled clamps to the last full page.
+        assert_eq!(scroll_window(100, 20, 999), (80, 20, 80, 0));
+        // Fewer items than rows: everything shown, nothing hidden.
+        assert_eq!(scroll_window(10, 20, 3), (0, 10, 0, 0));
+    }
+
+    #[test]
+    fn sort_key_cycles() {
+        assert_eq!(SortKey::Id.next(), SortKey::Up);
+        assert_eq!(SortKey::Up.next(), SortKey::Down);
+        assert_eq!(SortKey::Down.next(), SortKey::Age);
+        assert_eq!(SortKey::Age.next(), SortKey::Id);
+    }
+
+    #[test]
+    fn sort_connections_orders_by_key() {
+        use crate::metrics::ConnKind;
+        use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+        let a = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 1);
+        let mk = |id, up, down| ConnInfo {
+            id,
+            src: a,
+            target: "x:80".into(),
+            kind: ConnKind::Connect,
+            up,
+            down,
+        };
+        let mut conns = vec![mk(1, 10, 5), mk(2, 30, 1), mk(3, 20, 9)];
+        let seen = HashMap::new();
+
+        sort_connections(&mut conns, SortKey::Up, &seen);
+        assert_eq!(conns.iter().map(|c| c.id).collect::<Vec<_>>(), vec![2, 3, 1]);
+
+        sort_connections(&mut conns, SortKey::Down, &seen);
+        assert_eq!(conns.iter().map(|c| c.id).collect::<Vec<_>>(), vec![3, 1, 2]);
+
+        sort_connections(&mut conns, SortKey::Id, &seen);
+        assert_eq!(conns.iter().map(|c| c.id).collect::<Vec<_>>(), vec![1, 2, 3]);
     }
 
     #[test]
