@@ -65,6 +65,38 @@ pub enum Event {
     Log(String),
 }
 
+/// Render an [`Event`] into a one-line, human-readable log string.
+///
+/// Used by both the TUI log panel and the headless (stdout) logger so the two
+/// stay consistent. Lives here (rather than in the optional `tui` module) so it
+/// is available to headless builds compiled without the `tui` feature.
+pub fn format_event(ev: &Event) -> String {
+    match ev {
+        Event::Connect {
+            id,
+            src,
+            target,
+            kind,
+        } => {
+            let kind = match kind {
+                ConnKind::Connect => "CONNECT",
+                ConnKind::Udp => "UDP",
+            };
+            format!("[#{id}] {kind} open {src} -> {target}")
+        }
+        Event::Closed { id } => format!("[#{id}] closed"),
+        Event::Auth { ok, user } => {
+            if *ok {
+                format!("auth ok for '{user}'")
+            } else {
+                format!("auth failed (denied) for '{user}'")
+            }
+        }
+        Event::Error { code, msg } => format!("error 0x{code:02x}: {msg}"),
+        Event::Log(s) => s.clone(),
+    }
+}
+
 /// Shared metrics: global atomic counters plus a mutex-guarded connection
 /// registry.
 pub struct Metrics {
@@ -266,5 +298,15 @@ mod tests {
         m.record_success();
         m.record_success();
         assert_eq!(m.snapshot().successes, 2);
+    }
+
+    #[test]
+    fn format_event_auth_failure_mentions_user_and_failure() {
+        let s = format_event(&Event::Auth {
+            ok: false,
+            user: "alice".into(),
+        });
+        assert!(s.contains("alice"));
+        assert!(s.contains("fail") || s.contains("denied"));
     }
 }

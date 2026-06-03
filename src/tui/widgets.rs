@@ -15,7 +15,7 @@ use ratatui::text::Line;
 use ratatui::widgets::{Block, Borders, Cell, List, ListItem, Paragraph, Row, Table};
 use ratatui::Frame;
 
-use crate::metrics::{ConnKind, Event};
+use crate::metrics::ConnKind;
 
 /// Compute throughput in KB/s from a byte delta over an elapsed duration.
 ///
@@ -68,37 +68,6 @@ impl LogRing {
     /// Iterate the current lines oldest -> newest.
     pub fn lines(&self) -> impl Iterator<Item = &String> {
         self.buf.iter()
-    }
-}
-
-/// Render an [`Event`] into a one-line, human-readable log string.
-///
-/// Used by both the TUI log panel and the headless (stdout) logger so the two
-/// stay consistent.
-pub fn format_event(ev: &Event) -> String {
-    match ev {
-        Event::Connect {
-            id,
-            src,
-            target,
-            kind,
-        } => {
-            let kind = match kind {
-                ConnKind::Connect => "CONNECT",
-                ConnKind::Udp => "UDP",
-            };
-            format!("[#{id}] {kind} open {src} -> {target}")
-        }
-        Event::Closed { id } => format!("[#{id}] closed"),
-        Event::Auth { ok, user } => {
-            if *ok {
-                format!("auth ok for '{user}'")
-            } else {
-                format!("auth failed (denied) for '{user}'")
-            }
-        }
-        Event::Error { code, msg } => format!("error 0x{code:02x}: {msg}"),
-        Event::Log(s) => s.clone(),
     }
 }
 
@@ -265,7 +234,6 @@ fn render_log(frame: &mut Frame, area: Rect, state: &super::DashboardState) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::metrics::Event;
 
     #[test]
     fn rate_kbps_one_kb_per_sec() {
@@ -307,15 +275,5 @@ mod tests {
         assert_eq!(ring.len(), 2);
         let lines: Vec<&String> = ring.lines().collect();
         assert_eq!(lines, vec![&"one".to_string(), &"two".to_string()]);
-    }
-
-    #[test]
-    fn format_event_auth_failure_mentions_user_and_failure() {
-        let s = format_event(&Event::Auth {
-            ok: false,
-            user: "alice".into(),
-        });
-        assert!(s.contains("alice"));
-        assert!(s.contains("fail") || s.contains("denied"));
     }
 }

@@ -6,4 +6,5 @@ pub mod error;
 pub mod metrics;
 pub mod protocol;
 pub mod server;
+#[cfg(feature = "tui")]
 pub mod tui;

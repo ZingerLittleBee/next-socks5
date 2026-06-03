@@ -172,7 +172,7 @@ pub async fn run(
 fn drain_events(events: &mut broadcast::Receiver<Event>, log: &mut LogRing) {
     loop {
         match events.try_recv() {
-            Ok(ev) => log.push(widgets::format_event(&ev)),
+            Ok(ev) => log.push(crate::metrics::format_event(&ev)),
             Err(broadcast::error::TryRecvError::Empty)
             | Err(broadcast::error::TryRecvError::Closed) => break,
             Err(broadcast::error::TryRecvError::Lagged(n)) => {
