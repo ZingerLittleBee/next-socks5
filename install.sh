@@ -264,7 +264,10 @@ NoNewPrivileges=yes
 WantedBy=multi-user.target
 EOF
     $SUDO systemctl daemon-reload
-    $SUDO systemctl enable --now next-socks5.service
+    $SUDO systemctl enable next-socks5.service
+    # restart (not `enable --now`) so a reinstall actually reloads the new
+    # unit + config; `enable --now` does NOT restart an already-running service.
+    $SUDO systemctl restart next-socks5.service
     STARTED="yes"
     MANAGE_HINT="systemctl status next-socks5 | journalctl -u next-socks5 -f"
   elif command -v rc-update >/dev/null 2>&1 && command -v rc-service >/dev/null 2>&1 \
