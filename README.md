@@ -162,17 +162,29 @@ udp_idle_ms = 60000
 
 [limits]
 max_connections = 1024     # optional
+
+[admin]
+enabled = true             # local attach endpoint (default on)
+# socket = "/run/next-socks5/admin.sock"   # override the socket path
 ```
 
 ### CLI
 
 ```
-next-socks5 [OPTIONS]
+next-socks5 [OPTIONS]              Run the server (default)
+next-socks5 attach [OPTIONS]       Attach to a running server's dashboard
 
-  --config <path>    Path to a TOML config file
-  --listen <addr>    Override the listen address (e.g. 0.0.0.0:1080)
-  --no-tui           Run headless (events to stdout) instead of the dashboard
-  -h, --help         Print help
+Server options:
+  --config <path>       Path to a TOML config file
+  --listen <addr>       Override the listen address (e.g. 0.0.0.0:1080)
+  --no-tui              Run headless (events to stdout) instead of the dashboard
+  --no-admin            Disable the local admin/attach endpoint
+  --admin-socket <path> Override the admin socket path
+  -h, --help            Print help
+
+attach options:
+  --socket <path>       Admin socket to connect to
+                        (default /run/next-socks5/admin.sock)
 ```
 
 ## Usage
@@ -186,6 +198,39 @@ curl --socks5 alice:secret@127.0.0.1:1080 https://example.com
 ```
 
 In TUI mode press `q` (or Ctrl-C) to quit; the terminal is always restored.
+
+### Remote dashboard (attach)
+
+When the server runs headless (systemd / OpenRC / container), it still serves a
+live dashboard over a local Unix socket (default
+`/run/next-socks5/admin.sock`). From the same machine — typically over SSH into
+the VPS — attach to it to watch real-time throughput, connections, and events:
+
+```bash
+# Same machine, default socket:
+next-socks5 attach
+
+# Custom socket path:
+next-socks5 attach --socket /tmp/ns5.sock
+
+# Docker deployment:
+docker exec -it next-socks5 next-socks5 attach
+```
+
+The endpoint is local-only (no network exposure, no auth) and read-only — attach
+clients observe but cannot control the server. Press `q` to detach; if the
+server stops, the dashboard exits with `connection lost`.
+
+Disable the endpoint with `--no-admin` or `[admin] enabled = false`.
+
+For a manual install (`--no-service`), the process runs as your user and the
+default `/run` path is usually not writable. Start the server with a writable
+socket and attach to the same path:
+
+```bash
+next-socks5 --no-tui --admin-socket /tmp/ns5.sock
+next-socks5 attach --socket /tmp/ns5.sock
+```
 
 ## License
 
