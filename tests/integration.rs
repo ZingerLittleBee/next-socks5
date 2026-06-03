@@ -49,18 +49,20 @@ fn no_auth_config() -> Config {
     }
 }
 
-#[tokio::test]
-async fn no_auth_connect_echo() {
-    // 1. Start an echo server to act as the upstream target.
-    let echo_addr = spawn_echo_server().await;
-
-    // 2. Build config + shared state, bind the proxy listener, spawn the server.
-    let cfg = Arc::new(no_auth_config());
+/// Bind the proxy listener and spawn the SOCKS5 server with the given config.
+/// Returns the bound proxy address. Shared state (metrics/events/shutdown) is
+/// created internally and detached; tests only need the address to connect to.
+async fn start_server_with_config(cfg: Config) -> std::net::SocketAddr {
+    let cfg = Arc::new(cfg);
     let listener = TcpListener::bind(&cfg.listen).await.unwrap();
     let proxy_addr = listener.local_addr().unwrap();
     let metrics = Metrics::new();
     let (events, _events_rx) = broadcast::channel(64);
-    let (_shutdown_tx, shutdown_rx) = watch::channel(false);
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    // Keep the shutdown sender alive for the duration of the test process so the
+    // server never observes a closed channel and shuts down prematurely.
+    std::mem::forget(shutdown_tx);
+    std::mem::forget(_events_rx);
 
     tokio::spawn(server::run(
         listener,
@@ -69,6 +71,17 @@ async fn no_auth_connect_echo() {
         events.clone(),
         shutdown_rx,
     ));
+
+    proxy_addr
+}
+
+#[tokio::test]
+async fn no_auth_connect_echo() {
+    // 1. Start an echo server to act as the upstream target.
+    let echo_addr = spawn_echo_server().await;
+
+    // 2. Build config + shared state, bind the proxy listener, spawn the server.
+    let proxy_addr = start_server_with_config(no_auth_config()).await;
 
     // 3. Drive a raw client through the full handshake + CONNECT + echo path,
     //    wrapped in a timeout so a hang fails fast instead of blocking.
@@ -137,20 +150,7 @@ async fn udp_associate_echo() {
         };
 
         // 2. Build config + shared state, bind the proxy listener, spawn the server.
-        let cfg = Arc::new(no_auth_config());
-        let listener = TcpListener::bind(&cfg.listen).await.unwrap();
-        let proxy_addr = listener.local_addr().unwrap();
-        let metrics = Metrics::new();
-        let (events, _events_rx) = broadcast::channel(64);
-        let (_shutdown_tx, shutdown_rx) = watch::channel(false);
-
-        tokio::spawn(server::run(
-            listener,
-            cfg.clone(),
-            metrics.clone(),
-            events.clone(),
-            shutdown_rx,
-        ));
+        let proxy_addr = start_server_with_config(no_auth_config()).await;
 
         // 3. Client: connect TCP control, greeting, then UDP ASSOCIATE request.
         let mut control = TcpStream::connect(proxy_addr).await.unwrap();
@@ -202,4 +202,199 @@ async fn udp_associate_echo() {
     tokio::time::timeout(Duration::from_secs(5), scenario)
         .await
         .expect("udp associate scenario timed out");
+}
+
+/// Build a config requiring RFC 1929 username/password auth with a single
+/// `alice`/`secret` credential pair.
+fn password_config() -> Config {
+    Config {
+        listen: "127.0.0.1:0".to_string(),
+        auth: AuthConfig {
+            method: AuthMethod::Password,
+            users: vec![next_socks5::config::User {
+                username: "alice".to_string(),
+                password: "secret".to_string(),
+            }],
+        },
+        timeouts: Timeouts::default(),
+        limits: Limits::default(),
+        public_addr: None,
+    }
+}
+
+/// Encode an RFC 1929 username/password request: VER ULEN UNAME PLEN PASSWD.
+fn userpass_request(user: &str, pass: &str) -> Vec<u8> {
+    let mut req = vec![0x01, user.len() as u8];
+    req.extend_from_slice(user.as_bytes());
+    req.push(pass.len() as u8);
+    req.extend_from_slice(pass.as_bytes());
+    req
+}
+
+/// Build an IPv4 CONNECT request for the given address.
+fn connect_v4_request(addr: std::net::SocketAddr) -> Vec<u8> {
+    let v4 = match addr.ip() {
+        std::net::IpAddr::V4(v4) => v4,
+        std::net::IpAddr::V6(_) => panic!("expected v4 addr"),
+    };
+    let mut req = vec![0x05, 0x01, 0x00, 0x01];
+    req.extend_from_slice(&v4.octets());
+    req.extend_from_slice(&addr.port().to_be_bytes());
+    req
+}
+
+#[tokio::test]
+async fn password_auth_success_connect() {
+    let scenario = async {
+        // 1. Upstream echo target + a password-protected proxy.
+        let echo_addr = spawn_echo_server().await;
+        let proxy_addr = start_server_with_config(password_config()).await;
+
+        let mut client = TcpStream::connect(proxy_addr).await.unwrap();
+
+        // 2. Greeting offering NO_AUTH + USERPASS; server must select USERPASS.
+        client.write_all(&[0x05, 0x02, 0x00, 0x02]).await.unwrap();
+        let mut method_reply = [0u8; 2];
+        client.read_exact(&mut method_reply).await.unwrap();
+        assert_eq!(method_reply, [0x05, 0x02], "server should select userpass");
+
+        // 3. Send correct credentials; expect success reply.
+        client
+            .write_all(&userpass_request("alice", "secret"))
+            .await
+            .unwrap();
+        let mut auth_reply = [0u8; 2];
+        client.read_exact(&mut auth_reply).await.unwrap();
+        assert_eq!(auth_reply, [0x01, 0x00], "auth should succeed");
+
+        // 4. CONNECT to the echo server; expect a success reply.
+        client
+            .write_all(&connect_v4_request(echo_addr))
+            .await
+            .unwrap();
+        let mut reply = [0u8; 10];
+        client.read_exact(&mut reply).await.unwrap();
+        assert_eq!(reply[0], 0x05);
+        assert_eq!(reply[1], 0x00, "expected success reply code");
+
+        // 5. Relay round-trip through the echo server.
+        client.write_all(b"ping").await.unwrap();
+        let mut echoed = [0u8; 4];
+        client.read_exact(&mut echoed).await.unwrap();
+        assert_eq!(&echoed, b"ping");
+    };
+
+    tokio::time::timeout(Duration::from_secs(5), scenario)
+        .await
+        .expect("password auth success scenario timed out");
+}
+
+#[tokio::test]
+async fn password_auth_failure() {
+    let scenario = async {
+        let proxy_addr = start_server_with_config(password_config()).await;
+
+        let mut client = TcpStream::connect(proxy_addr).await.unwrap();
+
+        // Greeting offering NO_AUTH + USERPASS; server selects USERPASS.
+        client.write_all(&[0x05, 0x02, 0x00, 0x02]).await.unwrap();
+        let mut method_reply = [0u8; 2];
+        client.read_exact(&mut method_reply).await.unwrap();
+        assert_eq!(method_reply, [0x05, 0x02]);
+
+        // Wrong password: expect an auth failure reply.
+        client
+            .write_all(&userpass_request("alice", "wrong"))
+            .await
+            .unwrap();
+        let mut auth_reply = [0u8; 2];
+        client.read_exact(&mut auth_reply).await.unwrap();
+        assert_eq!(auth_reply, [0x01, 0x01], "auth should fail");
+
+        // The server must close the connection after a failed auth. A read now
+        // sees EOF (0 bytes) or a connection-reset error; either proves closure.
+        let mut buf = [0u8; 1];
+        match client.read(&mut buf).await {
+            Ok(0) => {}                       // clean EOF: connection closed
+            Ok(n) => panic!("expected closed connection, read {n} bytes"),
+            Err(_) => {}                      // reset/abort: also closed
+        }
+    };
+
+    tokio::time::timeout(Duration::from_secs(5), scenario)
+        .await
+        .expect("password auth failure scenario timed out");
+}
+
+#[tokio::test]
+async fn connect_refused_maps_0x05() {
+    let scenario = async {
+        let proxy_addr = start_server_with_config(no_auth_config()).await;
+
+        // Pick a free port by binding then dropping the listener, leaving the
+        // port unused. Connecting to it should yield ConnectionRefused on most
+        // systems. This is inherently best-effort: the OS may reuse the port,
+        // so we accept any non-success error code as proof the mapping works.
+        let dead = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let dead_addr = dead.local_addr().unwrap();
+        drop(dead);
+
+        let mut client = TcpStream::connect(proxy_addr).await.unwrap();
+
+        // No-auth handshake.
+        client.write_all(&[0x05, 0x01, 0x00]).await.unwrap();
+        let mut method_reply = [0u8; 2];
+        client.read_exact(&mut method_reply).await.unwrap();
+        assert_eq!(method_reply, [0x05, 0x00]);
+
+        // CONNECT to the now-free port.
+        client
+            .write_all(&connect_v4_request(dead_addr))
+            .await
+            .unwrap();
+        let mut reply = [0u8; 10];
+        client.read_exact(&mut reply).await.unwrap();
+        assert_eq!(reply[0], 0x05);
+        // Expect connection refused (0x05). Document the fallback: if the OS
+        // reports a different failure (e.g. host unreachable), the mapping still
+        // reached the client, which is what we ultimately verify.
+        assert_eq!(
+            reply[1], 0x05,
+            "expected connection refused (0x05), got {:#04x}",
+            reply[1]
+        );
+    };
+
+    tokio::time::timeout(Duration::from_secs(5), scenario)
+        .await
+        .expect("connect refused scenario timed out");
+}
+
+#[tokio::test]
+async fn bind_command_not_supported() {
+    let scenario = async {
+        let proxy_addr = start_server_with_config(no_auth_config()).await;
+
+        let mut client = TcpStream::connect(proxy_addr).await.unwrap();
+
+        // No-auth handshake.
+        client.write_all(&[0x05, 0x01, 0x00]).await.unwrap();
+        let mut method_reply = [0u8; 2];
+        client.read_exact(&mut method_reply).await.unwrap();
+        assert_eq!(method_reply, [0x05, 0x00]);
+
+        // BIND request (CMD=0x02) to an arbitrary IPv4 address.
+        client
+            .write_all(&[0x05, 0x02, 0x00, 0x01, 127, 0, 0, 1, 0x00, 0x50])
+            .await
+            .unwrap();
+        let mut reply = [0u8; 10];
+        client.read_exact(&mut reply).await.unwrap();
+        assert_eq!(reply[0], 0x05);
+        assert_eq!(reply[1], 0x07, "expected command not supported (0x07)");
+    };
+
+    tokio::time::timeout(Duration::from_secs(5), scenario)
+        .await
+        .expect("bind not supported scenario timed out");
 }
