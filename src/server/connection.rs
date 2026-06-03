@@ -124,13 +124,9 @@ pub async fn handle(
             connect::run(stream, request.address, cfg, metrics, events, peer).await;
         }
         Command::UdpAssociate => {
-            // TODO(Task 9): UDP ASSOCIATE. Temporary stub so CONNECT works and
-            // the code compiles; Task 9 will replace this with a real binding.
-            reply_failure(&mut stream, Socks5Error::CommandNotSupported).await;
-            let _ = events.send(Event::Error {
-                code: Socks5Error::CommandNotSupported.reply_code(),
-                msg: "UDP ASSOCIATE not yet implemented".to_string(),
-            });
+            // The TCP stream becomes the control connection that owns the UDP
+            // association; the relay runs until the control connection closes.
+            super::udp::run(stream, peer, cfg, metrics, events).await;
         }
         Command::Bind => {
             // BIND is intentionally unsupported per the project spec.
