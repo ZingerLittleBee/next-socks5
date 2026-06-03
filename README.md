@@ -151,9 +151,14 @@ listen = "0.0.0.0:1080"
 
 [auth]
 method = "password"        # "none" | "password"
+# One or more credentials — add a [[auth.users]] block per user.
 [[auth.users]]
 username = "alice"
 password = "secret"
+
+[[auth.users]]
+username = "bob"
+password = "hunter2"
 
 [timeouts]
 connect_ms = 10000
@@ -167,6 +172,14 @@ max_connections = 1024     # optional
 enabled = true             # local attach endpoint (default on)
 # socket = "/run/next-socks5/admin.sock"   # override the socket path
 ```
+
+**Multiple users.** With `method = "password"`, add a `[[auth.users]]` block per
+credential — a client is accepted if its username/password matches **any** entry
+in the list (RFC 1929). This is the recommended way to serve several users from a
+single port; you do not need a separate port per user. With `method = "none"` the
+proxy is open and the `users` list is ignored. (The dashboard logs each auth
+attempt as `auth ok/failed for '<user>'`; per-user traffic accounting is not yet
+shown in the connections table.)
 
 ### CLI
 
