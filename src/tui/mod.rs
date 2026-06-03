@@ -15,10 +15,10 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crossterm::event::{self, Event as CtEvent, KeyCode, KeyEventKind, KeyModifiers};
+use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
-use crossterm::execute;
 use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 use tokio::sync::{broadcast, watch};
@@ -194,8 +194,8 @@ fn poll_key() -> io::Result<Option<KeyAction>> {
         if let CtEvent::Key(key) = event::read()? {
             // Only react to presses (Windows also emits Release/Repeat).
             if key.kind == KeyEventKind::Press {
-                let ctrl_c = key.code == KeyCode::Char('c')
-                    && key.modifiers.contains(KeyModifiers::CONTROL);
+                let ctrl_c =
+                    key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL);
                 if key.code == KeyCode::Char('q') || ctrl_c {
                     return Ok(Some(KeyAction::Quit));
                 }

@@ -24,7 +24,11 @@ mod tests {
     #[test]
     fn encode_success_ipv4() {
         let mut out = Vec::new();
-        encode_reply(0x00, &Address::V4(Ipv4Addr::new(127, 0, 0, 1), 1080), &mut out);
+        encode_reply(
+            0x00,
+            &Address::V4(Ipv4Addr::new(127, 0, 0, 1), 1080),
+            &mut out,
+        );
         assert_eq!(
             out,
             vec![0x05, 0x00, 0x00, 0x01, 0x7f, 0x00, 0x00, 0x01, 0x04, 0x38]

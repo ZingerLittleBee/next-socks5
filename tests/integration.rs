@@ -173,7 +173,11 @@ async fn udp_associate_echo() {
         assert_eq!(reply[1], 0x00, "expected success reply code");
         // BND.ADDR must never be the unspecified address.
         let bnd_ip = std::net::Ipv4Addr::new(reply[4], reply[5], reply[6], reply[7]);
-        assert_ne!(bnd_ip, std::net::Ipv4Addr::UNSPECIFIED, "BND must not be 0.0.0.0");
+        assert_ne!(
+            bnd_ip,
+            std::net::Ipv4Addr::UNSPECIFIED,
+            "BND must not be 0.0.0.0"
+        );
         let bnd_port = u16::from_be_bytes([reply[8], reply[9]]);
         let relay_udp_addr = std::net::SocketAddr::from((bnd_ip, bnd_port));
 
@@ -315,9 +319,9 @@ async fn password_auth_failure() {
         // sees EOF (0 bytes) or a connection-reset error; either proves closure.
         let mut buf = [0u8; 1];
         match client.read(&mut buf).await {
-            Ok(0) => {}                       // clean EOF: connection closed
+            Ok(0) => {} // clean EOF: connection closed
             Ok(n) => panic!("expected closed connection, read {n} bytes"),
-            Err(_) => {}                      // reset/abort: also closed
+            Err(_) => {} // reset/abort: also closed
         }
     };
 

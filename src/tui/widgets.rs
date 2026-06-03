@@ -223,7 +223,13 @@ fn render_stats(frame: &mut Frame, area: Rect, state: &super::DashboardState) {
     let snap = &state.snapshot;
     // Per-error-code names for RFC 1928 reply codes 0x01..=0x08.
     const CODE_NAMES: [&str; 8] = [
-        "general", "ruleset", "netunreach", "hostunreach", "connrefused", "ttl", "badcmd",
+        "general",
+        "ruleset",
+        "netunreach",
+        "hostunreach",
+        "connrefused",
+        "ttl",
+        "badcmd",
         "badatyp",
     ];
     let codes: Vec<String> = (1..=8)
@@ -286,7 +292,10 @@ mod tests {
         ring.push("d".into());
         assert_eq!(ring.len(), 3);
         let lines: Vec<&String> = ring.lines().collect();
-        assert_eq!(lines, vec![&"b".to_string(), &"c".to_string(), &"d".to_string()]);
+        assert_eq!(
+            lines,
+            vec![&"b".to_string(), &"c".to_string(), &"d".to_string()]
+        );
     }
 
     #[test]
