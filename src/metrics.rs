@@ -219,6 +219,22 @@ impl Metrics {
     }
 }
 
+/// Abstract source of dashboard data, so the TUI can render either a local
+/// `Arc<Metrics>` or a remote, decoded snapshot.
+pub trait MetricsSource: Send + Sync {
+    fn snapshot(&self) -> Snapshot;
+    fn connections(&self) -> Vec<ConnInfo>;
+}
+
+impl MetricsSource for Metrics {
+    fn snapshot(&self) -> Snapshot {
+        Metrics::snapshot(self)
+    }
+    fn connections(&self) -> Vec<ConnInfo> {
+        Metrics::connections(self)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -309,6 +325,15 @@ mod tests {
         });
         assert!(s.contains("alice"));
         assert!(s.contains("fail") || s.contains("denied"));
+    }
+
+    #[test]
+    fn metrics_is_a_source() {
+        let m = Metrics::new();
+        m.register(addr(), "a:80".into(), ConnKind::Connect);
+        let src: std::sync::Arc<dyn MetricsSource> = m.clone();
+        assert_eq!(src.snapshot().total_conns, 1);
+        assert_eq!(src.connections().len(), 1);
     }
 
     #[test]
