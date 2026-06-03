@@ -23,8 +23,8 @@ jobs:
       matrix:
         include:
           # ---- Linux (musl, fully static — also runs on glibc distros) ----
-          - { target: x86_64-unknown-linux-musl, os: ubuntu-latest, cross: true }
-          - { target: aarch64-unknown-linux-musl, os: ubuntu-latest, cross: true }
+          - { target: x86_64-unknown-linux-musl, os: blacksmith-4vcpu-ubuntu-2404, cross: true }
+          - { target: aarch64-unknown-linux-musl, os: blacksmith-4vcpu-ubuntu-2404, cross: true }
           # Temporarily disabled — re-enable when these platforms are needed.
           # - { target: armv7-unknown-linux-musleabihf, os: ubuntu-latest, cross: true }
           # ---- macOS ----
