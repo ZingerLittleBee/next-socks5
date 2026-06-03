@@ -23,7 +23,7 @@ use ratatui::backend::CrosstermBackend;
 use ratatui::Terminal;
 use tokio::sync::{broadcast, watch};
 
-use crate::metrics::{ConnInfo, Event, Metrics, Snapshot};
+use crate::metrics::{ConnInfo, Event, MetricsSource, Snapshot};
 use widgets::LogRing;
 
 /// How often the dashboard re-samples metrics and redraws.
@@ -101,10 +101,11 @@ fn install_panic_hook() {
 /// Ctrl-C the function sets `shutdown` to `true` and returns; it also returns
 /// when some other party flips the shutdown watch channel.
 pub async fn run(
-    metrics: Arc<Metrics>,
+    source: Arc<dyn MetricsSource>,
     mut events: broadcast::Receiver<Event>,
     shutdown_tx: watch::Sender<bool>,
     mut shutdown_rx: watch::Receiver<bool>,
+    listen_addr: Option<String>,
 ) -> io::Result<()> {
     install_panic_hook();
     let _guard = TerminalGuard::enter()?;
@@ -112,8 +113,8 @@ pub async fn run(
         Terminal::new(CrosstermBackend::new(io::stdout()))?;
     terminal.clear()?;
 
-    let mut state = DashboardState::new(None);
-    let mut last_snapshot = metrics.snapshot();
+    let mut state = DashboardState::new(listen_addr);
+    let mut last_snapshot = source.snapshot();
     let mut last_instant = Instant::now();
     let mut ticker = tokio::time::interval(TICK);
 
@@ -123,7 +124,7 @@ pub async fn run(
             _ = ticker.tick() => {
                 let now = Instant::now();
                 let dt = now.duration_since(last_instant);
-                let snap = metrics.snapshot();
+                let snap = source.snapshot();
 
                 state.up_kbps =
                     widgets::rate_kbps(snap.bytes_up.saturating_sub(last_snapshot.bytes_up), dt);
@@ -133,7 +134,7 @@ pub async fn run(
                 // Drain whatever events are pending without blocking.
                 drain_events(&mut events, &mut state.log);
 
-                state.connections = metrics.connections();
+                state.connections = source.connections();
                 state.connections.sort_by_key(|c| c.id);
                 state.snapshot = snap.clone();
 

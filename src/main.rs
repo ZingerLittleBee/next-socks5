@@ -77,11 +77,13 @@ async fn main() {
             let _ = events_tx.send(Event::Log(format!("auth: {auth_str}")));
             let _ = events_tx.send(Event::Log("press q to quit".to_string()));
 
+            let source: Arc<dyn next_socks5::metrics::MetricsSource> = metrics.clone();
             if let Err(e) = tui::run(
-                metrics.clone(),
+                source,
                 events_rx,
                 shutdown_tx.clone(),
                 shutdown_rx.clone(),
+                Some(listen_str.clone()),
             )
             .await
             {
