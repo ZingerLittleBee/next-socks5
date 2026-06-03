@@ -1,0 +1,15 @@
+listen = "127.0.0.1:1080"
+
+[auth]
+method = "password"        # "none" | "password"
+[[auth.users]]
+username = "alice"
+password = "secret"
+
+[timeouts]
+connect_ms = 10000
+tcp_idle_ms = 300000
+udp_idle_ms = 60000
+
+[limits]
+max_connections = 1024     # optional
