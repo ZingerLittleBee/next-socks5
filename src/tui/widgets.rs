@@ -278,7 +278,7 @@ pub fn render(frame: &mut Frame, state: &super::DashboardState) {
     // right spans the full band height so it reads clearly.
     let band = Layout::default()
         .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(55), Constraint::Percentage(45)])
+        .constraints([Constraint::Percentage(37), Constraint::Percentage(63)])
         .split(chunks[1]);
     let left = Layout::default()
         .direction(Direction::Vertical)
