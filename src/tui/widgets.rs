@@ -169,6 +169,34 @@ pub fn fmt_hms(d: Duration) -> String {
     format!("{}:{:02}:{:02}", s / 3600, (s % 3600) / 60, s % 60)
 }
 
+/// Y-axis labels for the throughput chart, scaled to a single unit chosen from
+/// the axis maximum (KB/s -> MB/s -> GB/s). Returns `["0", mid, max]`, or just
+/// `["0", max]` when the range is too small for a distinct midpoint (avoids a
+/// duplicate `0`). `ymax_kbps` is the axis maximum in KB/s.
+pub fn rate_axis_labels(ymax_kbps: f64) -> Vec<String> {
+    const MB: f64 = 1024.0;
+    const GB: f64 = 1024.0 * 1024.0;
+    let (div, unit) = if ymax_kbps >= GB {
+        (GB, "GB/s")
+    } else if ymax_kbps >= MB {
+        (MB, "MB/s")
+    } else {
+        (1.0, "KB/s")
+    };
+    let fmt = |v: f64| {
+        if div == 1.0 {
+            format!("{:.0} {unit}", v / div)
+        } else {
+            format!("{:.1} {unit}", v / div)
+        }
+    };
+    if ymax_kbps <= 1.0 {
+        vec!["0".to_string(), fmt(ymax_kbps.max(1.0))]
+    } else {
+        vec!["0".to_string(), fmt(ymax_kbps / 2.0), fmt(ymax_kbps)]
+    }
+}
+
 /// Success percentage of completed requests, e.g. `98.2%`; `--` when none yet.
 pub fn fmt_pct(ok: u64, fail: u64) -> String {
     let total = ok + fail;
@@ -310,11 +338,7 @@ fn render_rate(frame: &mut Frame, area: Rect, state: &super::DashboardState) {
         .max()
         .unwrap_or(0)
         .max(1) as f64;
-    let y_labels = vec![
-        "0".to_string(),
-        format!("{}", (ymax / 2.0) as u64),
-        format!("{} KB/s", ymax as u64),
-    ];
+    let y_labels = rate_axis_labels(ymax);
 
     let datasets = vec![
         Dataset::default()
@@ -571,6 +595,16 @@ mod tests {
             h.push(v);
         }
         assert_eq!(h.peak(), 9);
+    }
+
+    #[test]
+    fn rate_axis_labels_scale_unit_and_avoid_duplicate_zero() {
+        // Idle: only two labels, so the bottom 0 isn't duplicated by a mid 0.
+        assert_eq!(rate_axis_labels(1.0), vec!["0", "1 KB/s"]);
+        // Small KB/s range: integer KB/s labels.
+        assert_eq!(rate_axis_labels(40.0), vec!["0", "20 KB/s", "40 KB/s"]);
+        // Large range scales to MB/s with one decimal.
+        assert_eq!(rate_axis_labels(1500.0), vec!["0", "0.7 MB/s", "1.5 MB/s"]);
     }
 
     #[test]
