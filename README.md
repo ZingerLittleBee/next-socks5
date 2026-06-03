@@ -18,8 +18,10 @@ is hand-written; the dependency footprint is kept deliberately small.
   connection limit → `0x02`, refused/unreachable/timeout mapped from the OS).
 - **UDP relay** — SOCKS5 encapsulation, `FRAG != 0` dropped, source-IP
   filtering, a client-reachable `BND.ADDR` (never `0.0.0.0`), and idle reclaim.
-- **TUI dashboard** — real-time throughput, active-connection table, success/
-  error stats, and a scrolling log (built on ratatui).
+- **TUI dashboard** — real-time throughput with a trend chart, a sortable
+  active-connection table, success/error stats, and a scrollable log with
+  keyboard navigation (built on ratatui). A hidden `--mock` flag streams
+  synthetic data for previewing/testing the UI without real traffic.
 - **Headless mode** — `--no-tui` streams events to stdout, ideal for systemd /
   containers. The TUI is an optional cargo feature, so headless builds drop the
   ratatui/crossterm dependencies entirely.
@@ -213,11 +215,39 @@ curl --socks5 alice:secret@127.0.0.1:1080 https://example.com
 ### Dashboard (TUI)
 
 The terminal dashboard is on by default — just run the server without
-`--no-tui`, and press `q` (or Ctrl-C) to quit:
+`--no-tui`:
 
 ```bash
 next-socks5 --listen 127.0.0.1:1080
 ```
+
+It shows live throughput (with a 30s trend chart), success/error stats, a
+sortable **Active connections** table, and a scrolling **Log**. Keys:
+
+| Key | Action |
+|---|---|
+| `Tab` | Move scroll focus between the connections table and the log (focused panel is highlighted) |
+| `s` | Cycle the connection sort key: `ID` → `UP↓` → `DOWN↓` → `AGE↓` (shown in the table title) |
+| `↑` / `↓` or `k` / `j` | Scroll the focused panel one line |
+| `PgUp` / `PgDn` | Scroll the focused panel one screen |
+| `q` / `Ctrl-C` | Quit |
+
+#### Preview / test the dashboard with synthetic data
+
+To exercise the dashboard without sending any real traffic, add `--mock`. It
+drives the same metrics and event bus the proxy uses with a stream of synthetic
+connections, throughput, and errors — handy for trying the sorting/scrolling
+keys or taking screenshots. The fake activity stops as soon as you quit.
+
+```bash
+# Local preview: open the dashboard and continuously generate mock data.
+cargo run --release -- --listen 127.0.0.1:1080 --mock
+
+# Or with an installed binary:
+next-socks5 --listen 127.0.0.1:1080 --mock
+```
+
+`--mock` is a demo/testing aid only; never enable it on a real proxy.
 
 ### Attach to a running service
 
