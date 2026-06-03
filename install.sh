@@ -11,7 +11,7 @@
 #   ./install.sh --no-auth --port 1080    # no auth, fixed port
 #   ./install.sh --auth --user bob --pass s3cret --port 1080
 #
-set -euo pipefail
+set -eu
 
 # --- Constants ----------------------------------------------------------------
 REPO="zinger-labs/next-socks5"
@@ -28,6 +28,8 @@ LISTEN_ADDR="0.0.0.0"     # bind address inside config
 VERSION="latest"          # release tag (e.g. v0.1.0) or "latest"
 BIN_DIR="/usr/local/bin"  # binary install dir
 DEPLOY_DIR="./next-socks5-deploy"   # docker compose dir
+NO_SERVICE="${NO_SERVICE:-no}"      # skip init service setup (env or --no-service)
+STARTED="no"                        # flipped to "yes" once a service is started
 
 # --- Logging ------------------------------------------------------------------
 log()  { printf '\033[0;32m==>\033[0m %s\n' "$*"; }
@@ -50,11 +52,15 @@ Usage: install.sh [options]
   --version <tag>           Release version, e.g. v0.1.0 (default: latest).
   --bin-dir <dir>           Binary install dir (default /usr/local/bin).
   --dir <dir>               Docker deploy dir (default ./next-socks5-deploy).
+  --no-service              Install binary + config only; do not set up/start a
+                            systemd/OpenRC service (also via env NO_SERVICE=1).
   -h, --help                Show this help.
 
 Notes:
   * Binary install targets Linux (musl static builds: x86_64 / aarch64) and sets
-    up a systemd service when systemd + root are available.
+    up a systemd or OpenRC service. If neither is present, the binary + config
+    are installed but NOT started (and won't auto-start after a reboot) — start
+    it manually, or use --method docker for a self-restarting container.
   * Docker install uses host networking so UDP ASSOCIATE works correctly
     (Linux hosts; Docker Desktop on macOS/Windows does not support host mode).
 EOF
@@ -150,6 +156,15 @@ render_config() {
   echo "udp_idle_ms = 60000"
 }
 
+# Explain how to start the server by hand (used when no service is set up).
+print_manual_start() {
+  STARTED="no"
+  warn "service NOT started; start it manually with:"
+  warn "  ${BIN_DIR}/${BIN_NAME} --no-tui --config /etc/next-socks5/config.toml"
+  warn "without systemd/OpenRC it will NOT auto-start after a reboot"
+  MANAGE_HINT="start: ${BIN_DIR}/${BIN_NAME} --no-tui --config /etc/next-socks5/config.toml"
+}
+
 # --- Argument parsing ---------------------------------------------------------
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -163,6 +178,7 @@ while [ $# -gt 0 ]; do
     --version)  VERSION="${2:?--version needs a value}"; shift 2 ;;
     --bin-dir)  BIN_DIR="${2:?--bin-dir needs a value}"; shift 2 ;;
     --dir)      DEPLOY_DIR="${2:?--dir needs a value}"; shift 2 ;;
+    --no-service) NO_SERVICE="yes"; shift ;;
     -h|--help)  usage; exit 0 ;;
     *) err "unknown option: $1 (see --help)" ;;
   esac
@@ -170,6 +186,7 @@ done
 
 # --- Resolve dynamic defaults -------------------------------------------------
 case "$METHOD" in binary|docker) ;; *) err "--method must be 'binary' or 'docker'";; esac
+case "$NO_SERVICE" in 1|y|yes|true|on) NO_SERVICE="yes" ;; *) NO_SERVICE="no" ;; esac
 
 if [ -z "$PORT" ]; then
   PORT="$(find_free_port)"
@@ -221,8 +238,11 @@ install_binary() {
   render_config | $SUDO tee /etc/next-socks5/config.toml >/dev/null
   $SUDO chmod 0640 /etc/next-socks5/config.toml
 
-  # Set up a systemd service when possible; otherwise print a run command.
-  if command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
+  # --- Service setup (skipped with --no-service) ---
+  if [ "$NO_SERVICE" = "yes" ]; then
+    warn "--no-service: installed binary + config only"
+    print_manual_start
+  elif command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
     log "installing systemd service: next-socks5.service"
     $SUDO tee /etc/systemd/system/next-socks5.service >/dev/null <<EOF
 [Unit]
@@ -241,6 +261,7 @@ WantedBy=multi-user.target
 EOF
     $SUDO systemctl daemon-reload
     $SUDO systemctl enable --now next-socks5.service
+    STARTED="yes"
     MANAGE_HINT="systemctl status next-socks5 | journalctl -u next-socks5 -f"
   elif command -v rc-update >/dev/null 2>&1 && command -v rc-service >/dev/null 2>&1 \
        && { [ -d /run/openrc ] || rc-status >/dev/null 2>&1; }; then
@@ -265,35 +286,11 @@ EOF
     $SUDO chmod +x /etc/init.d/next-socks5
     $SUDO rc-update add next-socks5 default
     $SUDO rc-service next-socks5 restart
+    STARTED="yes"
     MANAGE_HINT="rc-service next-socks5 status|stop  |  logs: tail -f /var/log/next-socks5.log"
   else
-    # No init system (e.g. minimal containers): start in the background with nohup.
-    local logf pidf pid
-    logf="/var/log/next-socks5.log"; pidf="/var/run/next-socks5.pid"
-    $SUDO sh -c ": >> '$logf'" 2>/dev/null || { logf="/tmp/next-socks5.log"; pidf="/tmp/next-socks5.pid"; }
-    log "systemd not found; starting in the background (nohup)"
-    $SUDO sh -c "nohup '${BIN_DIR}/${BIN_NAME}' --no-tui --config /etc/next-socks5/config.toml >'$logf' 2>&1 </dev/null & echo \$! > '$pidf'"
-    sleep 1
-    pid="$($SUDO cat "$pidf" 2>/dev/null || true)"
-    if [ -n "$pid" ] && $SUDO kill -0 "$pid" 2>/dev/null; then
-      log "started (pid $pid)"
-      # Best-effort auto-start on reboot (systemd/OpenRC do this natively; bare
-      # nohup does not survive a reboot, so register an @reboot cron entry).
-      if command -v crontab >/dev/null 2>&1; then
-        cron_line="@reboot ${BIN_DIR}/${BIN_NAME} --no-tui --config /etc/next-socks5/config.toml >>${logf} 2>&1"
-        if { $SUDO crontab -l 2>/dev/null | grep -v 'next-socks5 --no-tui'; echo "$cron_line"; } | $SUDO crontab - 2>/dev/null; then
-          log "registered @reboot auto-start via cron (needs crond running)"
-        else
-          warn "could not register auto-start; the service will NOT survive a reboot"
-        fi
-      else
-        warn "no cron found: the service will NOT auto-start after a reboot"
-        warn "for durable setups use --method docker (restart policy) or a systemd/OpenRC host"
-      fi
-      MANAGE_HINT="stop: $SUDO kill $pid  |  logs: $SUDO tail -f $logf"
-    else
-      err "next-socks5 failed to start; check $logf"
-    fi
+    warn "no supported init system detected (need systemd or OpenRC)"
+    print_manual_start
   fi
 }
 
@@ -333,6 +330,7 @@ EOF
 
   log "pulling image and starting container"
   ( cd "$DEPLOY_DIR" && $compose pull && $compose up -d )
+  STARTED="yes"
   MANAGE_HINT="cd ${DEPLOY_DIR} && ${compose} logs -f | ${compose} down"
 }
 
@@ -348,7 +346,11 @@ host_display="$LISTEN_ADDR"
 [ "$LISTEN_ADDR" = "0.0.0.0" ] && host_display="<server-ip>"
 
 echo ""
-log "next-socks5 installed and started ✔"
+if [ "$STARTED" = "yes" ]; then
+  log "next-socks5 installed and started ✔"
+else
+  log "next-socks5 installed — NOT started (see warnings above) ⚠"
+fi
 echo "  method   : $METHOD"
 echo "  listen   : ${LISTEN_ADDR}:${PORT}"
 if [ "$AUTH" = "on" ]; then

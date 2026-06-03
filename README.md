@@ -55,16 +55,19 @@ Or clone and run locally:
 
 | Flag | Description | Default |
 |---|---|---|
-| `--method <binary\|docker>` | Native binary (+ systemd) or Docker Compose | `binary` |
+| `--method <binary\|docker>` | Native binary (systemd/OpenRC) or Docker Compose | `binary` |
 | `--auth` / `--no-auth` | Enable username/password auth, or run open | `--auth` |
 | `--user` / `--pass` | Credentials for auth mode (random if omitted) | random |
 | `--port <port>` | Listen port (random free port if omitted) | random |
 | `--listen <addr>` | Bind address | `0.0.0.0` |
 | `--version <tag>` | Release version, e.g. `v0.1.0` | `latest` |
+| `--no-service` | Install binary + config only; don't set up/start a service | off |
 
-> Binary install targets Linux (musl x86_64 / aarch64) and sets up a systemd
-> service when available. Docker install uses host networking so UDP ASSOCIATE
-> works (Linux hosts).
+> Binary install targets Linux (musl x86_64 / aarch64) and sets up a **systemd**
+> or **OpenRC** service. If neither init system is present, the binary and config
+> are installed but **not started** (and won't auto-start on reboot) — start it
+> manually or use `--method docker` for a self-restarting container. The
+> installer is POSIX `sh` (no bash required).
 
 ### Option 2 — Docker
 
