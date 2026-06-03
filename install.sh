@@ -242,8 +242,32 @@ EOF
     $SUDO systemctl daemon-reload
     $SUDO systemctl enable --now next-socks5.service
     MANAGE_HINT="systemctl status next-socks5 | journalctl -u next-socks5 -f"
+  elif command -v rc-update >/dev/null 2>&1 && command -v rc-service >/dev/null 2>&1 \
+       && { [ -d /run/openrc ] || rc-status >/dev/null 2>&1; }; then
+    # OpenRC (Alpine and other OpenRC-based distros).
+    log "installing OpenRC service: next-socks5"
+    $SUDO tee /etc/init.d/next-socks5 >/dev/null <<EOF
+#!/sbin/openrc-run
+
+name="next-socks5"
+description="next-socks5 SOCKS5 server"
+command="${BIN_DIR}/${BIN_NAME}"
+command_args="--no-tui --config /etc/next-socks5/config.toml"
+command_background=true
+pidfile="/run/next-socks5.pid"
+output_log="/var/log/next-socks5.log"
+error_log="/var/log/next-socks5.log"
+
+depend() {
+    need net
+}
+EOF
+    $SUDO chmod +x /etc/init.d/next-socks5
+    $SUDO rc-update add next-socks5 default
+    $SUDO rc-service next-socks5 restart
+    MANAGE_HINT="rc-service next-socks5 status|stop  |  logs: tail -f /var/log/next-socks5.log"
   else
-    # No systemd (e.g. containers): start in the background with nohup.
+    # No init system (e.g. minimal containers): start in the background with nohup.
     local logf pidf pid
     logf="/var/log/next-socks5.log"; pidf="/var/run/next-socks5.pid"
     $SUDO sh -c ": >> '$logf'" 2>/dev/null || { logf="/tmp/next-socks5.log"; pidf="/tmp/next-socks5.pid"; }
