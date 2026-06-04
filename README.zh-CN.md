@@ -43,7 +43,7 @@ curl -fsSL https://raw.githubusercontent.com/zinger-labs/next-socks5/main/instal
 
 # 带参数(注意用 -s -- 把参数透传给 curl | sh):
 curl -fsSL https://raw.githubusercontent.com/zinger-labs/next-socks5/main/install.sh \
-  | sh -s -- --method docker --auth --port 1080
+  | sh -s -- --no-auth --port 1080
 ```
 
 或克隆到本地运行。下面每个示例都带注释;在认证模式下若不提供 `--user` / `--pass`,
@@ -98,6 +98,18 @@ curl -fsSL https://raw.githubusercontent.com/zinger-labs/next-socks5/main/instal
 > POSIX `sh`(无需 bash)。
 
 ### 方式二 —— Docker
+
+最快方式 —— 让安装器生成 `docker-compose.yml` + `config.toml` 并替你启动容器
+(host 网络;带 `--auth` 且不给 `--user` / `--pass` 时,凭证会自动生成并在结尾
+打印):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/zinger-labs/next-socks5/main/install.sh \
+  | sh -s -- --method docker --auth --port 1080
+```
+
+这会把两个文件写入 `./next-socks5-deploy/`(可用 `--dir` 覆盖)并执行
+`docker compose up -d`。若想手动配置:
 
 ```bash
 # 无认证,host 网络(UDP ASSOCIATE 可用),监听 1080:

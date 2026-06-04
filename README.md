@@ -46,7 +46,7 @@ curl -fsSL https://raw.githubusercontent.com/zinger-labs/next-socks5/main/instal
 
 # With options (note the `-s --` to pass args through curl | sh):
 curl -fsSL https://raw.githubusercontent.com/zinger-labs/next-socks5/main/install.sh \
-  | sh -s -- --method docker --auth --port 1080
+  | sh -s -- --no-auth --port 1080
 ```
 
 Or clone and run locally. Each example is annotated below; in auth mode with no
@@ -103,6 +103,18 @@ URL and a `curl` test command.
 > installer is POSIX `sh` (no bash required).
 
 ### Option 2 — Docker
+
+Fastest — let the installer generate `docker-compose.yml` + `config.toml` and
+start the container for you (host networking; with `--auth` and no `--user` /
+`--pass`, credentials are auto-generated and printed at the end):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/zinger-labs/next-socks5/main/install.sh \
+  | sh -s -- --method docker --auth --port 1080
+```
+
+This writes both files into `./next-socks5-deploy/` (override with `--dir`) and
+runs `docker compose up -d`. To wire it up manually instead:
 
 ```bash
 # No-auth, host networking (UDP ASSOCIATE works), listening on 1080:
