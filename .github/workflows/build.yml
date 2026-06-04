@@ -23,8 +23,8 @@ jobs:
       matrix:
         include:
           # ---- Linux (musl, fully static — also runs on glibc distros) ----
-          - { target: x86_64-unknown-linux-musl, os: blacksmith-4vcpu-ubuntu-2404, cross: true }
-          - { target: aarch64-unknown-linux-musl, os: blacksmith-4vcpu-ubuntu-2404, cross: true }
+          - { target: x86_64-unknown-linux-musl, os: ubuntu-latest, cross: true }
+          - { target: aarch64-unknown-linux-musl, os: ubuntu-latest, cross: true }
           # Temporarily disabled — re-enable when these platforms are needed.
           # - { target: armv7-unknown-linux-musleabihf, os: ubuntu-latest, cross: true }
           # ---- macOS ----
@@ -88,7 +88,7 @@ jobs:
     needs: build
     # Only publish images on a tag push, reusing the binaries from `build`.
     if: startsWith(github.ref, 'refs/tags/')
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
@@ -147,7 +147,7 @@ jobs:
     needs: build
     # Only cut a release on a tag push, attaching the binaries from `build`.
     if: startsWith(github.ref, 'refs/tags/')
-    runs-on: blacksmith-4vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
