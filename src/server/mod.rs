@@ -46,7 +46,11 @@ pub async fn run(
                     Err(e) => {
                         // Accept errors are transient (e.g. fd exhaustion); log
                         // and keep serving rather than tearing down the server.
+                        // Back off briefly so a persistent error (e.g. EMFILE,
+                        // where the listener stays readable) does not spin the
+                        // loop at 100% CPU.
                         let _ = events.send(Event::Log(format!("accept error: {e}")));
+                        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
                     }
                 }
             }

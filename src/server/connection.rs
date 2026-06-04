@@ -3,11 +3,13 @@
 
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
+use std::time::Duration;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::{broadcast, watch};
 
+use crate::auth::verify_credentials;
 use crate::config::{AuthMethod, Config};
 use crate::error::Socks5Error;
 use crate::metrics::{Event, Metrics};
@@ -25,6 +27,15 @@ use super::connect;
 /// A greeting/request/auth message is small and bounded by the wire format.
 const READ_BUF: usize = 512;
 
+/// Why a protocol read ended without yielding a message.
+enum ReadFail {
+    /// EOF, IO error, or buffer overflow: just close, no reply is meaningful.
+    Closed,
+    /// The bytes were a complete-but-invalid message (e.g. bad sub-negotiation
+    /// version). The caller may send a best-effort failure reply before closing.
+    Parse,
+}
+
 /// Drive a single client connection through the SOCKS5 state machine.
 pub async fn handle(
     mut stream: TcpStream,
@@ -34,75 +45,21 @@ pub async fn handle(
     events: broadcast::Sender<Event>,
     _shutdown: watch::Receiver<bool>,
 ) {
-    // 1. Greeting + method selection.
-    let require_userpass = cfg.auth.method == AuthMethod::Password;
-    let offered = match read_message(&mut stream, |b| match parse_greeting(b) {
-        Ok(methods) => Ok(Some(methods)),
-        // A short read needs more bytes; any other error is fatal.
-        Err(HandshakeError::Truncated) => Ok(None),
-        Err(_) => Err(()),
-    })
-    .await
+    // The entire pre-relay negotiation (greeting, optional auth, request) is
+    // bounded by a single deadline so a slow/stalled client cannot pin this
+    // task and its file descriptor indefinitely (pre-auth slowloris).
+    let deadline = Duration::from_millis(cfg.timeouts.handshake_ms);
+    let request = match tokio::time::timeout(deadline, negotiate(&mut stream, &cfg, &events)).await
     {
-        Some(m) => m,
-        None => return,
+        // A complete request was negotiated.
+        Ok(Some(req)) => req,
+        // negotiate() already sent any appropriate reply / chose to close.
+        Ok(None) => return,
+        // Handshake deadline elapsed: drop the half-open connection.
+        Err(_) => return,
     };
 
-    let chosen = select_method(&offered, require_userpass);
-    if stream.write_all(&method_reply(chosen)).await.is_err() {
-        return;
-    }
-    if chosen == METHOD_NONE_ACCEPTABLE {
-        return;
-    }
-
-    // 2. Username/password authentication (RFC 1929) when required.
-    if chosen == METHOD_USERPASS {
-        let creds = read_message(&mut stream, |b| match parse_userpass(b) {
-            Ok(c) => Ok(Some(c)),
-            // A short read needs more bytes; any other error is fatal.
-            Err(HandshakeError::Truncated) => Ok(None),
-            Err(_) => Err(()),
-        })
-        .await;
-        let (user, ok) = match creds {
-            Some((u, p)) => {
-                let ok = cfg
-                    .auth
-                    .users
-                    .iter()
-                    .any(|c| c.username == u && c.password == p);
-                (u, ok)
-            }
-            None => return,
-        };
-        let _ = events.send(Event::Auth {
-            ok,
-            user: user.clone(),
-        });
-        if stream.write_all(&userpass_reply(ok)).await.is_err() || !ok {
-            return;
-        }
-    }
-
-    // 3. SOCKS request.
-    let request = match read_request(&mut stream).await {
-        Ok(req) => req,
-        Err(maybe_code) => {
-            // A precise reply code (when known) is sent before closing; some
-            // failures (EOF/IO/overflow/bad version) have no SOCKS reply.
-            if let Some(code) = maybe_code {
-                reply_failure(&mut stream, code.clone()).await;
-                let _ = events.send(Event::Error {
-                    code: code.reply_code(),
-                    msg: "malformed request".to_string(),
-                });
-            }
-            return;
-        }
-    };
-
-    // 4. Enforce the connection limit (best-effort, checked after the request).
+    // Enforce the connection limit (best-effort, checked after the request).
     if let Some(limit) = cfg.limits.max_connections {
         if metrics.active() >= limit as u64 {
             reply_failure(&mut stream, Socks5Error::NotAllowed).await;
@@ -114,7 +71,7 @@ pub async fn handle(
         }
     }
 
-    // 5. Dispatch on the command.
+    // Dispatch on the command.
     match request.command {
         Command::Connect => {
             connect::run(stream, request.address, cfg, metrics, events, peer).await;
@@ -135,12 +92,95 @@ pub async fn handle(
     }
 }
 
+/// Run the greeting, optional username/password auth, and request parse.
+///
+/// Returns `Some(request)` on success, or `None` after handling its own
+/// reply/close on any failure. Designed to be wrapped in a single handshake
+/// deadline by [`handle`].
+async fn negotiate(
+    stream: &mut TcpStream,
+    cfg: &Config,
+    events: &broadcast::Sender<Event>,
+) -> Option<Request> {
+    // 1. Greeting + method selection.
+    let require_userpass = cfg.auth.method == AuthMethod::Password;
+    let offered = match read_message(stream, |b| match parse_greeting(b) {
+        Ok(methods) => Ok(Some(methods)),
+        // A short read needs more bytes; any other error is fatal.
+        Err(HandshakeError::Truncated) => Ok(None),
+        Err(_) => Err(()),
+    })
+    .await
+    {
+        Ok(m) => m,
+        // A malformed greeting (e.g. bad version) has no defined reply: close.
+        Err(_) => return None,
+    };
+
+    let chosen = select_method(&offered, require_userpass);
+    if stream.write_all(&method_reply(chosen)).await.is_err() {
+        return None;
+    }
+    if chosen == METHOD_NONE_ACCEPTABLE {
+        return None;
+    }
+
+    // 2. Username/password authentication (RFC 1929) when required.
+    if chosen == METHOD_USERPASS {
+        let creds = read_message(stream, |b| match parse_userpass(b) {
+            Ok(c) => Ok(Some(c)),
+            // A short read needs more bytes; any other error is fatal.
+            Err(HandshakeError::Truncated) => Ok(None),
+            Err(_) => Err(()),
+        })
+        .await;
+        let (user, ok) = match creds {
+            Ok((u, p)) => {
+                let ok = verify_credentials(&cfg.auth.users, &u, &p);
+                (u, ok)
+            }
+            // A complete-but-malformed auth message gets a best-effort RFC 1929
+            // failure reply before closing, rather than a silent TCP close.
+            Err(ReadFail::Parse) => {
+                let _ = stream.write_all(&userpass_reply(false)).await;
+                return None;
+            }
+            Err(ReadFail::Closed) => return None,
+        };
+        let _ = events.send(Event::Auth {
+            ok,
+            user: user.clone(),
+        });
+        if stream.write_all(&userpass_reply(ok)).await.is_err() || !ok {
+            return None;
+        }
+    }
+
+    // 3. SOCKS request.
+    match read_request(stream).await {
+        Ok(req) => Some(req),
+        Err(maybe_code) => {
+            // A precise reply code (when known) is sent before closing; some
+            // failures (EOF/IO/overflow/bad version) have no SOCKS reply.
+            if let Some(code) = maybe_code {
+                reply_failure(stream, code.clone()).await;
+                let _ = events.send(Event::Error {
+                    code: code.reply_code(),
+                    msg: "malformed request".to_string(),
+                });
+            }
+            None
+        }
+    }
+}
+
 /// Read from `stream` into a growing buffer, applying `parse` after each chunk.
 ///
 /// `parse` returns `Ok(Some(value))` once a complete message is available,
 /// `Ok(None)` when more bytes are needed, and `Err(())` on a fatal parse error.
-/// Returns `None` on EOF, IO error, fatal parse error, or buffer overflow.
-async fn read_message<T, F>(stream: &mut TcpStream, mut parse: F) -> Option<T>
+/// Returns `Err(ReadFail::Parse)` for a complete-but-invalid message and
+/// `Err(ReadFail::Closed)` on EOF, IO error, or buffer overflow.
+async fn read_message<T, F>(stream: &mut TcpStream, mut parse: F) -> Result<T, ReadFail>
 where
     F: FnMut(&[u8]) -> Result<Option<T>, ()>,
 {
@@ -148,17 +188,17 @@ where
     let mut chunk = [0u8; READ_BUF];
     loop {
         match parse(&buf) {
-            Ok(Some(value)) => return Some(value),
+            Ok(Some(value)) => return Ok(value),
             Ok(None) => {}
-            Err(()) => return None,
+            Err(()) => return Err(ReadFail::Parse),
         }
         if buf.len() > READ_BUF {
-            return None;
+            return Err(ReadFail::Closed);
         }
         match stream.read(&mut chunk).await {
-            Ok(0) => return None,
+            Ok(0) => return Err(ReadFail::Closed),
             Ok(n) => buf.extend_from_slice(&chunk[..n]),
-            Err(_) => return None,
+            Err(_) => return Err(ReadFail::Closed),
         }
     }
 }
