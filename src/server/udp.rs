@@ -5,7 +5,7 @@
 //! reply, then relays datagrams between the client and arbitrary targets until
 //! the control connection closes or the association goes idle.
 
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
 use std::time::Duration;
@@ -77,7 +77,22 @@ pub async fn run(
     // the client (src.ip() == client_ip) versus replies from a target: when the
     // target shares the client's IP (e.g. everything on 127.0.0.1), the source
     // IP alone is ambiguous, so a known-target match takes precedence.
+    //
+    // Bounded to `udp_max_targets`: `known_order` keeps insertion order so the
+    // oldest target is evicted once the cap is hit, so a client spraying many
+    // distinct destinations cannot grow this set without bound.
+    let max_targets = cfg.limits.udp_max_targets.max(1);
     let mut known_targets: HashSet<SocketAddr> = HashSet::new();
+    let mut known_order: VecDeque<SocketAddr> = VecDeque::new();
+
+    // DNS for a domain target is bounded so a slow resolver cannot stall the
+    // whole association (it shares this select loop with control-EOF detection).
+    let resolve_timeout = Duration::from_millis(cfg.timeouts.connect_ms);
+
+    // Optional outbound rate cap (datagrams/sec) via a 1-second fixed window.
+    let rate_pps = cfg.limits.udp_rate_pps;
+    let mut window_start = tokio::time::Instant::now();
+    let mut window_count: u32 = 0;
 
     let idle = Duration::from_millis(cfg.timeouts.udp_idle_ms);
     let mut buf = vec![0u8; UDP_BUF];
@@ -97,18 +112,20 @@ pub async fn run(
                     Ok(Err(_)) => break,
                 };
 
-                if known_targets.contains(&src) {
-                    // Target -> client reply. Re-encapsulate and forward to the
-                    // client's learned UDP source (if any).
-                    if let Some(dst) = client_udp_addr {
-                        let mut framed = Vec::with_capacity(n + 22);
-                        crate::protocol::udp::encap(&addr_from_socket(src), &buf[..n], &mut framed);
-                        let _ = udp_sock.send_to(&framed, dst).await;
-                        metrics.add_down(id, n as u64);
+                // Classify the source. The client's full ip:port is locked on
+                // first contact; afterwards only that exact address counts as the
+                // client, so another host sharing the client IP cannot hijack the
+                // association or inject outbound datagrams.
+                let is_client = match client_udp_addr {
+                    Some(addr) => src == addr,
+                    None => src.ip() == client_ip,
+                };
+
+                if is_client {
+                    // Client -> target datagram. Lock the client's UDP source.
+                    if client_udp_addr.is_none() {
+                        client_udp_addr = Some(src);
                     }
-                } else if src.ip() == client_ip {
-                    // Client -> target datagram. Learn the client's UDP source.
-                    client_udp_addr = Some(src);
                     let datagram = match decap(&buf[..n]) {
                         Ok(dg) => dg,
                         // Malformed datagram: drop it.
@@ -118,17 +135,60 @@ pub async fn run(
                     if datagram.frag != 0 {
                         continue;
                     }
-                    let target = match resolve(&datagram.address).await {
-                        Some(t) => t,
-                        // Unresolvable target: drop the datagram.
-                        None => continue,
+                    // Optional outbound rate limit (reflection/flood guard).
+                    // Counts successful sends, so dropped/blocked datagrams do
+                    // not consume the budget; the over-limit check still gates
+                    // before the resolve work.
+                    if let Some(limit) = rate_pps {
+                        if window_start.elapsed() >= Duration::from_secs(1) {
+                            window_start = tokio::time::Instant::now();
+                            window_count = 0;
+                        }
+                        if window_count >= limit {
+                            continue;
+                        }
+                    }
+                    let target = match tokio::time::timeout(
+                        resolve_timeout,
+                        resolve(&datagram.address),
+                    )
+                    .await
+                    {
+                        Ok(Some(t)) => t,
+                        // Unresolvable target or DNS too slow: drop the datagram.
+                        _ => continue,
                     };
+                    // Egress policy: never relay to internal/metadata addresses.
+                    if cfg.egress.is_blocked(target.ip()) {
+                        continue;
+                    }
                     if udp_sock.send_to(&datagram.data, target).await.is_ok() {
-                        known_targets.insert(target);
+                        // Count only successful sends against the rate budget.
+                        if rate_pps.is_some() {
+                            window_count += 1;
+                        }
+                        // Track the target (bounded; evict the oldest over cap).
+                        if known_targets.insert(target) {
+                            known_order.push_back(target);
+                            if known_order.len() > max_targets {
+                                if let Some(old) = known_order.pop_front() {
+                                    known_targets.remove(&old);
+                                }
+                            }
+                        }
                         metrics.add_up(id, datagram.data.len() as u64);
                     }
+                } else if known_targets.contains(&src) {
+                    // Target -> client reply. Re-encapsulate and forward to the
+                    // client's learned UDP source (if any).
+                    if let Some(dst) = client_udp_addr {
+                        let mut framed = Vec::with_capacity(n + 22);
+                        crate::protocol::udp::encap(&addr_from_socket(src), &buf[..n], &mut framed);
+                        let _ = udp_sock.send_to(&framed, dst).await;
+                        metrics.add_down(id, n as u64);
+                    }
                 }
-                // Otherwise: source IP is neither the client nor a known target
+                // Otherwise: source is neither the client nor a known target
                 // (injection / spoofing). Drop it. This is source filtering.
             }
 
