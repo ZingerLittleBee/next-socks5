@@ -106,6 +106,28 @@ async fn start_server_with_shutdown(
     (proxy_addr, metrics, shutdown_tx)
 }
 
+/// Spawn a one-shot TCP echo server. Returns its bound address.
+async fn spawn_echo(addr_out: &str) -> std::net::SocketAddr {
+    let listener = TcpListener::bind(addr_out).await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        if let Ok((mut sock, _)) = listener.accept().await {
+            let mut b = [0u8; 1024];
+            loop {
+                match sock.read(&mut b).await {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => {
+                        if sock.write_all(&b[..n]).await.is_err() {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+    });
+    addr
+}
+
 /// Drive a no-auth greeting and assert the server selects NO-AUTH.
 async fn no_auth_handshake(client: &mut TcpStream) {
     client.write_all(&[0x05, 0x01, 0x00]).await.unwrap();
@@ -542,4 +564,41 @@ async fn shutdown_aborts_in_flight_relay() {
         ended, 0,
         "BUG: shutdown did not abort the in-flight relay (active stayed {ended})"
     );
+}
+
+// ---------------------------------------------------------------------------
+// #0 — pipelined bytes are preserved
+// ---------------------------------------------------------------------------
+
+/// A client that pipelines greeting + CONNECT request + first payload in a
+/// single TCP segment must have the payload relayed, not discarded.
+#[tokio::test]
+async fn pipelined_greeting_request_and_payload_are_relayed() {
+    let echo_addr = spawn_echo("127.0.0.1:0").await;
+    let proxy_addr = start_server(no_auth_config()).await;
+
+    let mut client = TcpStream::connect(proxy_addr).await.unwrap();
+    // One write: greeting, then CONNECT request, then the first payload.
+    let mut pipelined = vec![0x05, 0x01, 0x00];
+    pipelined.extend_from_slice(&connect_v4_request(echo_addr));
+    pipelined.extend_from_slice(b"ping");
+    client.write_all(&pipelined).await.unwrap();
+
+    let mut method_reply = [0u8; 2];
+    client.read_exact(&mut method_reply).await.unwrap();
+    assert_eq!(method_reply, [0x05, 0x00]);
+    let mut connect_reply = [0u8; 10];
+    tokio::time::timeout(Duration::from_secs(2), client.read_exact(&mut connect_reply))
+        .await
+        .expect("no connect reply — pipelined request was dropped")
+        .unwrap();
+    assert_eq!(connect_reply[1], 0x00, "CONNECT should succeed");
+
+    // The pipelined "ping" must have reached the echo target and come back.
+    let mut echoed = [0u8; 4];
+    tokio::time::timeout(Duration::from_secs(2), client.read_exact(&mut echoed))
+        .await
+        .expect("BUG: pipelined payload after the request was dropped")
+        .unwrap();
+    assert_eq!(&echoed, b"ping");
 }

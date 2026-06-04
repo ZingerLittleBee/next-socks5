@@ -19,11 +19,14 @@ use crate::protocol::reply::{encode_reply, REP_SUCCEEDED};
 
 /// Handle a CONNECT request: dial `target` and relay bytes to/from `client`.
 ///
-/// `shutdown` cancels an in-flight relay on server shutdown.
+/// `initial` holds any bytes the client pipelined after the request; they are
+/// written upstream before the relay. `shutdown` cancels an in-flight relay on
+/// server shutdown.
 #[allow(clippy::too_many_arguments)]
 pub async fn run(
     mut client: TcpStream,
     target: Address,
+    initial: Vec<u8>,
     cfg: Arc<Config>,
     metrics: Arc<Metrics>,
     events: broadcast::Sender<Event>,
@@ -108,14 +111,28 @@ pub async fn run(
         kind: ConnKind::Connect,
     });
 
-    // 5. Relay both directions until either side closes, the idle timeout
-    //    fires, or shutdown is requested.
-    let idle = Duration::from_millis(cfg.timeouts.tcp_idle_ms);
-    let relay = copy_bidirectional_counted(&mut client, &mut upstream, idle, &metrics, id);
-    tokio::select! {
-        _ = relay => {}
-        // Server shutdown: stop relaying; the streams close as run() returns.
-        _ = wait_for_shutdown(&mut shutdown) => {}
+    // 5. Relay any pipelined initial payload upstream, then relay both
+    //    directions until either side closes, the idle timeout fires, or
+    //    shutdown is requested.
+    let initial_ok = if initial.is_empty() {
+        true
+    } else {
+        match upstream.write_all(&initial).await {
+            Ok(()) => {
+                metrics.add_up(id, initial.len() as u64);
+                true
+            }
+            Err(_) => false,
+        }
+    };
+    if initial_ok {
+        let idle = Duration::from_millis(cfg.timeouts.tcp_idle_ms);
+        let relay = copy_bidirectional_counted(&mut client, &mut upstream, idle, &metrics, id);
+        tokio::select! {
+            _ = relay => {}
+            // Server shutdown: stop relaying; the streams close as run() returns.
+            _ = wait_for_shutdown(&mut shutdown) => {}
+        }
     }
 
     metrics.record_success();

@@ -28,15 +28,6 @@ use super::connect;
 /// A greeting/request/auth message is small and bounded by the wire format.
 const READ_BUF: usize = 512;
 
-/// Why a protocol read ended without yielding a message.
-enum ReadFail {
-    /// EOF, IO error, or buffer overflow: just close, no reply is meaningful.
-    Closed,
-    /// The bytes were a complete-but-invalid message (e.g. bad sub-negotiation
-    /// version). The caller may send a best-effort failure reply before closing.
-    Parse,
-}
-
 /// Drive a single client connection through the SOCKS5 state machine.
 ///
 /// `_permit` keeps the connection counted against the accept-time admission caps
@@ -56,21 +47,30 @@ pub async fn handle(
     // bounded by a single deadline so a slow/stalled client cannot pin this
     // task and its file descriptor indefinitely (pre-auth slowloris).
     let deadline = Duration::from_millis(cfg.timeouts.handshake_ms);
-    let request = match tokio::time::timeout(deadline, negotiate(&mut stream, &cfg, &events)).await
-    {
-        // A complete request was negotiated.
-        Ok(Some(req)) => req,
-        // negotiate() already sent any appropriate reply / chose to close.
-        Ok(None) => return,
-        // Handshake deadline elapsed: drop the half-open connection.
-        Err(_) => return,
-    };
+    let (request, initial) =
+        match tokio::time::timeout(deadline, negotiate(&mut stream, &cfg, &events)).await {
+            // A complete request was negotiated (with any pipelined tail bytes).
+            Ok(Some(v)) => v,
+            // negotiate() already sent any appropriate reply / chose to close.
+            Ok(None) => return,
+            // Handshake deadline elapsed: drop the half-open connection.
+            Err(_) => return,
+        };
 
-    // Dispatch on the command. The connection limit is enforced at accept time
-    // via the admission permit, so no post-request check is needed here.
+    // Dispatch on the command.
     match request.command {
         Command::Connect => {
-            connect::run(stream, request.address, cfg, metrics, events, peer, shutdown).await;
+            connect::run(
+                stream,
+                request.address,
+                initial,
+                cfg,
+                metrics,
+                events,
+                peer,
+                shutdown,
+            )
+            .await;
         }
         Command::UdpAssociate => {
             // The TCP stream becomes the control connection that owns the UDP
@@ -88,29 +88,37 @@ pub async fn handle(
     }
 }
 
-/// Run the greeting, optional username/password auth, and request parse.
+/// Run the greeting, optional username/password auth, and request parse over a
+/// single persistent buffer, so bytes a client pipelines past one message
+/// boundary are preserved for the next step (and the request's trailing bytes
+/// are returned as the relay's initial payload).
 ///
-/// Returns `Some(request)` on success, or `None` after handling its own
-/// reply/close on any failure. Designed to be wrapped in a single handshake
-/// deadline by [`handle`].
+/// Returns `Some((request, pipelined_tail))` on success, or `None` after
+/// handling its own reply/close on any failure. Designed to be wrapped in a
+/// single handshake deadline by [`handle`].
 async fn negotiate(
     stream: &mut TcpStream,
     cfg: &Config,
     events: &broadcast::Sender<Event>,
-) -> Option<Request> {
-    // 1. Greeting + method selection.
+) -> Option<(Request, Vec<u8>)> {
     let require_userpass = cfg.auth.method == AuthMethod::Password;
-    let offered = match read_message(stream, |b| match parse_greeting(b) {
-        Ok(methods) => Ok(Some(methods)),
-        // A short read needs more bytes; any other error is fatal.
-        Err(HandshakeError::Truncated) => Ok(None),
-        Err(_) => Err(()),
-    })
-    .await
-    {
-        Ok(m) => m,
-        // A malformed greeting (e.g. bad version) has no defined reply: close.
-        Err(_) => return None,
+    let mut buf: Vec<u8> = Vec::with_capacity(READ_BUF);
+
+    // 1. Greeting + method selection.
+    let offered = loop {
+        match parse_greeting(&buf) {
+            Ok(methods) => {
+                // VER + NMETHODS + methods.
+                buf.drain(..2 + methods.len());
+                break methods;
+            }
+            // A short read needs more bytes; any other error is fatal.
+            Err(HandshakeError::Truncated) => {}
+            Err(_) => return None,
+        }
+        if buf.len() > READ_BUF || !read_more(stream, &mut buf).await {
+            return None;
+        }
     };
 
     let chosen = select_method(&offered, require_userpass);
@@ -123,25 +131,26 @@ async fn negotiate(
 
     // 2. Username/password authentication (RFC 1929) when required.
     if chosen == METHOD_USERPASS {
-        let creds = read_message(stream, |b| match parse_userpass(b) {
-            Ok(c) => Ok(Some(c)),
-            // A short read needs more bytes; any other error is fatal.
-            Err(HandshakeError::Truncated) => Ok(None),
-            Err(_) => Err(()),
-        })
-        .await;
-        let (user, ok) = match creds {
-            Ok((u, p)) => {
-                let ok = verify_credentials(&cfg.auth.users, &u, &p);
-                (u, ok)
+        let (user, ok) = loop {
+            match parse_userpass(&buf) {
+                Ok((u, p)) => {
+                    // VER + ULEN + UNAME + PLEN + PASSWD.
+                    buf.drain(..2 + u.len() + 1 + p.len());
+                    let ok = verify_credentials(&cfg.auth.users, &u, &p);
+                    break (u, ok);
+                }
+                // A short read needs more bytes; any other error is fatal.
+                Err(HandshakeError::Truncated) => {}
+                // A complete-but-malformed auth message gets a best-effort RFC
+                // 1929 failure reply before closing, not a silent TCP close.
+                Err(_) => {
+                    let _ = stream.write_all(&userpass_reply(false)).await;
+                    return None;
+                }
             }
-            // A complete-but-malformed auth message gets a best-effort RFC 1929
-            // failure reply before closing, rather than a silent TCP close.
-            Err(ReadFail::Parse) => {
-                let _ = stream.write_all(&userpass_reply(false)).await;
+            if buf.len() > READ_BUF || !read_more(stream, &mut buf).await {
                 return None;
             }
-            Err(ReadFail::Closed) => return None,
         };
         let _ = events.send(Event::Auth {
             ok,
@@ -153,92 +162,67 @@ async fn negotiate(
     }
 
     // 3. SOCKS request.
-    match read_request(stream).await {
-        Ok(req) => Some(req),
-        Err(maybe_code) => {
-            // A precise reply code (when known) is sent before closing; some
-            // failures (EOF/IO/overflow/bad version) have no SOCKS reply.
-            if let Some(code) = maybe_code {
-                reply_failure(stream, code.clone()).await;
-                let _ = events.send(Event::Error {
-                    code: code.reply_code(),
-                    msg: "malformed request".to_string(),
-                });
-            }
-            None
-        }
-    }
-}
-
-/// Read from `stream` into a growing buffer, applying `parse` after each chunk.
-///
-/// `parse` returns `Ok(Some(value))` once a complete message is available,
-/// `Ok(None)` when more bytes are needed, and `Err(())` on a fatal parse error.
-/// Returns `Err(ReadFail::Parse)` for a complete-but-invalid message and
-/// `Err(ReadFail::Closed)` on EOF, IO error, or buffer overflow.
-async fn read_message<T, F>(stream: &mut TcpStream, mut parse: F) -> Result<T, ReadFail>
-where
-    F: FnMut(&[u8]) -> Result<Option<T>, ()>,
-{
-    let mut buf = Vec::with_capacity(READ_BUF);
-    let mut chunk = [0u8; READ_BUF];
-    loop {
-        match parse(&buf) {
-            Ok(Some(value)) => return Ok(value),
-            Ok(None) => {}
-            Err(()) => return Err(ReadFail::Parse),
-        }
-        if buf.len() > READ_BUF {
-            return Err(ReadFail::Closed);
-        }
-        match stream.read(&mut chunk).await {
-            Ok(0) => return Err(ReadFail::Closed),
-            Ok(n) => buf.extend_from_slice(&chunk[..n]),
-            Err(_) => return Err(ReadFail::Closed),
-        }
-    }
-}
-
-/// Read and parse a SOCKS5 request, reassembling across multiple TCP reads.
-///
-/// On success returns the parsed [`Request`]. On failure returns the SOCKS5
-/// reply code that should be sent to the client before closing, or `None` when
-/// the connection should simply be closed with no reply (EOF, IO error, buffer
-/// overflow, or a bad protocol version that has no defined reply code).
-///
-/// Truncation — whether of the fixed header ([`RequestError::Truncated`]) or of
-/// the address bytes ([`AddrError::Truncated`]) — means "need more bytes", so we
-/// keep reading instead of treating it as fatal.
-async fn read_request(stream: &mut TcpStream) -> Result<Request, Option<Socks5Error>> {
-    let mut buf = Vec::with_capacity(READ_BUF);
-    let mut chunk = [0u8; READ_BUF];
-    loop {
+    let request = loop {
         match parse_request(&buf) {
-            Ok(req) => return Ok(req),
+            Ok(req) => {
+                // VER + CMD + RSV + encoded address.
+                let mut encoded = Vec::new();
+                req.address.encode(&mut encoded);
+                buf.drain(..3 + encoded.len());
+                break req;
+            }
             // Both truncation cases need more bytes; keep reading.
             Err(RequestError::Truncated) | Err(RequestError::Addr(AddrError::Truncated)) => {}
             // Unrecognized command byte: command not supported.
-            Err(RequestError::BadCommand(_)) => return Err(Some(Socks5Error::CommandNotSupported)),
+            Err(RequestError::BadCommand(_)) => {
+                return reply_request_error(stream, events, Socks5Error::CommandNotSupported).await;
+            }
             // Unknown ATYP: address type not supported.
             Err(RequestError::Addr(AddrError::BadAtyp(_))) => {
-                return Err(Some(Socks5Error::AddressNotSupported))
+                return reply_request_error(stream, events, Socks5Error::AddressNotSupported).await;
             }
             // Malformed domain is a generic failure, not an unsupported ATYP.
             Err(RequestError::Addr(AddrError::BadDomain)) => {
-                return Err(Some(Socks5Error::General))
+                return reply_request_error(stream, events, Socks5Error::General).await;
             }
             // Bad version has no well-defined SOCKS reply; close the connection.
-            Err(RequestError::BadVersion(_)) => return Err(None),
+            Err(RequestError::BadVersion(_)) => return None,
         }
-        if buf.len() > READ_BUF {
-            return Err(None);
+        if buf.len() > READ_BUF || !read_more(stream, &mut buf).await {
+            return None;
         }
-        match stream.read(&mut chunk).await {
-            Ok(0) => return Err(None),
-            Ok(n) => buf.extend_from_slice(&chunk[..n]),
-            Err(_) => return Err(None),
+    };
+
+    // Any bytes left after the request are pipelined relay payload.
+    Some((request, buf))
+}
+
+/// Read one chunk from `stream`, appending it to `buf`. Returns `false` on EOF
+/// or IO error.
+async fn read_more(stream: &mut TcpStream, buf: &mut Vec<u8>) -> bool {
+    let mut chunk = [0u8; READ_BUF];
+    match stream.read(&mut chunk).await {
+        Ok(0) | Err(_) => false,
+        Ok(n) => {
+            buf.extend_from_slice(&chunk[..n]);
+            true
         }
     }
+}
+
+/// Send the failure reply for a malformed request and emit an error event, then
+/// return `None` to close the connection.
+async fn reply_request_error(
+    stream: &mut TcpStream,
+    events: &broadcast::Sender<Event>,
+    err: Socks5Error,
+) -> Option<(Request, Vec<u8>)> {
+    reply_failure(stream, err.clone()).await;
+    let _ = events.send(Event::Error {
+        code: err.reply_code(),
+        msg: "malformed request".to_string(),
+    });
+    None
 }
 
 /// Send a best-effort failure reply with a zeroed IPv4 BND address.
