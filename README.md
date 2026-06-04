@@ -163,12 +163,14 @@ username = "bob"
 password = "hunter2"
 
 [timeouts]
+handshake_ms = 10000       # greeting+auth+request deadline (anti-slowloris)
 connect_ms = 10000
 tcp_idle_ms = 300000
 udp_idle_ms = 60000
 
 [limits]
-max_connections = 1024     # optional
+max_connections = 2048     # optional: global concurrent cap (unbounded if unset)
+max_per_ip = 64            # optional: per-source-IP concurrent cap (unbounded if unset)
 
 [admin]
 enabled = true             # local attach endpoint (default on)
@@ -182,6 +184,29 @@ single port; you do not need a separate port per user. With `method = "none"` th
 proxy is open and the `users` list is ignored. (The dashboard logs each auth
 attempt as `auth ok/failed for '<user>'`; per-user traffic accounting is not yet
 shown in the connections table.)
+
+**Connection limits.** Both caps under `[limits]` are **optional and unbounded by
+default**; the server enforces them at accept time, so half-open/handshaking
+connections count too. They are not set automatically — opt in via the config:
+
+- `max_connections` — global cap on concurrent connections; a backstop against
+  file-descriptor / task exhaustion. Size it to your host (the OS `RLIMIT_NOFILE`
+  is the ultimate ceiling; each CONNECT relay uses ~2 fds).
+- `max_per_ip` — concurrent connections from a single source IP. Stops one client
+  from monopolizing the proxy or brute-forcing credentials at high concurrency. A
+  generous value (e.g. 64–256) does not affect normal clients; lower it only if you
+  do not expect many users behind a single NAT.
+
+For an **internet-facing** deployment, set both. The proxy has no built-in auth
+rate-limiting, so also front the listen port with a host firewall / fail2ban when
+it is publicly exposed.
+
+**Secure defaults.** Egress filtering is **on by default**: the proxy refuses to
+relay to loopback, link-local (including the `169.254.169.254` cloud-metadata
+address), and private/RFC1918 ranges (an SSRF / open-relay guard). If you genuinely
+need to reach internal targets, relax it with an `[egress]` section — see
+[`config.example.toml`](config.example.toml). The pre-relay handshake is bounded by
+`timeouts.handshake_ms` (default 10s) to drop slowloris-style stalled clients.
 
 ### CLI
 
