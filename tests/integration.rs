@@ -3,7 +3,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use next_socks5::config::{AuthConfig, AuthMethod, Config, Limits, Timeouts};
+use next_socks5::config::{AuthConfig, AuthMethod, Config, Egress, Limits, Timeouts};
 use next_socks5::metrics::Metrics;
 use next_socks5::protocol::address::Address;
 use next_socks5::protocol::udp;
@@ -47,6 +47,8 @@ fn no_auth_config() -> Config {
         limits: Limits::default(),
         public_addr: None,
         admin: Default::default(),
+        // Tests relay to loopback echo servers; allow it.
+        egress: Egress::permissive(),
     }
 }
 
@@ -225,6 +227,8 @@ fn password_config() -> Config {
         limits: Limits::default(),
         public_addr: None,
         admin: Default::default(),
+        // Tests relay to loopback echo servers; allow it.
+        egress: Egress::permissive(),
     }
 }
 
