@@ -11,6 +11,8 @@ script itself, and all background processes are cleaned up on exit.
 | `smoke_connect.sh` | Builds the server, then proves SOCKS5 **CONNECT** works end-to-end through the proxy against a local `python3 -m http.server`. Covers a no-auth proxy plus a password-auth proxy (correct credentials succeed, wrong credentials are rejected). |
 | `smoke_udp.sh` | Builds the server, then proves SOCKS5 **UDP ASSOCIATE** relay works against a local UDP echo server, driven by a small inline `python3` SOCKS5 UDP client (a datagram is relayed through the proxy and the echo is verified). |
 | `run_all.sh` | Runs `cargo test`, then `smoke_connect.sh`, then `smoke_udp.sh`, and prints a PASS/FAIL summary. Exits non-zero if any step fails. |
+| `bench.sh` | Single-host **performance** sanity bench (throughput + latency + CPS, no-auth and password, plus a direct baseline) using only bash + `curl` + `python3`. See [`docs/PERFORMANCE.md`](../../docs/PERFORMANCE.md) for methodology, caveats, and reference numbers. |
+| `socks5_cps.go` | Accurate **CPS** load client (and a `-sink` TCP server), pure Go stdlib. Each worker does a full in-process SOCKS5 handshake + `CONNECT`, measuring real connections/s and handshake-latency percentiles that `curl` cannot. |
 
 ## Running
 
@@ -23,6 +25,16 @@ bash tests/scripts/run_all.sh
 The scripts are executable, so `./tests/scripts/run_all.sh` also works. They can
 be invoked from any working directory; the repository root is resolved from the
 script location.
+
+Benchmarking is separate from the smoke tests (it is not part of `run_all.sh`):
+
+```sh
+bash tests/scripts/bench.sh                 # single-host throughput/latency/CPS
+go build -o /tmp/socks5_cps tests/scripts/socks5_cps.go   # accurate CPS client
+```
+
+See [`docs/PERFORMANCE.md`](../../docs/PERFORMANCE.md) for the full benchmarking
+guide, including the two-host setup needed for a trustworthy CPS ceiling.
 
 ## Environment variables
 
@@ -39,6 +51,7 @@ All have sensible defaults, so no configuration is needed for a normal run.
 - `cargo` (to build the binary)
 - `curl` with SOCKS5 support (`--socks5`)
 - `python3`
+- `go` — only for the optional `socks5_cps.go` CPS client (not needed for the smoke tests or `bench.sh`)
 
 ## Notes
 

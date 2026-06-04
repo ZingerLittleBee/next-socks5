@@ -365,6 +365,15 @@ next-socks5 serve --no-tui --admin-socket /tmp/ns5.sock
 next-socks5 attach --socket /tmp/ns5.sock
 ```
 
+## Performance
+
+On a single 4-core cloud VM (loopback), next-socks5 relays at **~2 GB/s** with
+**~1.6 ms** of added per-request latency and **~6k new connections/s**, and
+profiling shows the proxy is kernel/network-bound with no lock contention — i.e.
+the proxy itself is not the bottleneck. See
+[`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) for the methodology, the reproducible
+harness ([`tests/scripts/`](tests/scripts/)), and full numbers.
+
 ## License
 
 See [LICENSE](LICENSE).
