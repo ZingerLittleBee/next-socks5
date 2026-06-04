@@ -5,6 +5,20 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.2] - 2026-06-05
+
+The project moved to its own repository and now re-publishes its release
+artifacts from there. There are no functional changes to the server.
+
+### Changed
+
+- The project now lives at `github.com/ZingerLittleBee/next-socks5`. The
+  container image is published to `ghcr.io/zingerlittlebee/next-socks5`, and the
+  `install.sh` one-liner, README links, and release/download URLs all point to
+  the new location.
+- CI build, image, and release jobs run on GitHub-hosted `ubuntu-latest`
+  runners again.
+
 ## [0.3.1] - 2026-06-04
 
 A bare `next-socks5` run on a host already running the service used to start a
