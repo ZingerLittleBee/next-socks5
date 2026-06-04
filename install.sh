@@ -286,6 +286,14 @@ EOF
     # restart (not `enable --now`) so a reinstall actually reloads the new
     # unit + config; `enable --now` does NOT restart an already-running service.
     $SUDO systemctl restart next-socks5.service
+    # A port clash (e.g. a Docker install already bound to this port) makes the
+    # unit crash-loop; confirm it is actually active rather than reporting success.
+    sleep 1
+    if ! $SUDO systemctl is-active --quiet next-socks5.service; then
+      warn "service failed to start — recent logs:"
+      $SUDO journalctl -u next-socks5 -n 20 --no-pager >&2 2>/dev/null || true
+      err "next-socks5.service is not active (often: port ${PORT} already in use — check 'ss -tlnp | grep ${PORT}')"
+    fi
     STARTED="yes"
     MANAGE_HINT="systemctl status next-socks5 | journalctl -u next-socks5 -f"
   elif command -v rc-update >/dev/null 2>&1 && command -v rc-service >/dev/null 2>&1 \
@@ -356,11 +364,31 @@ services:
     network_mode: host
     volumes:
       - ./config.toml:/etc/next-socks5/config.toml:ro
+    # Writable runtime dir for the admin/attach Unix socket. The image runs as an
+    # unprivileged user (uid 65534) that cannot create /run/next-socks5 itself, so
+    # without this the admin endpoint is disabled and \`next-socks5 attach\` fails.
+    tmpfs:
+      - /run/next-socks5
     command: ["--config", "/etc/next-socks5/config.toml"]
 EOF
 
   log "pulling image and starting container"
   ( cd "$DEPLOY_DIR" && $compose pull && $compose up -d )
+
+  # With host networking a port clash (e.g. an existing binary/systemd install on
+  # the same port) makes the container crash-loop on bind, yet `up -d` still
+  # returns success. Give it a moment, then confirm it actually stayed up — a
+  # restarted container means it failed to start. Surface the real error instead
+  # of falsely reporting "started".
+  local running restarts
+  sleep 2
+  running="$(docker inspect -f '{{.State.Running}}' next-socks5 2>/dev/null || echo false)"
+  restarts="$(docker inspect -f '{{.State.RestartCount}}' next-socks5 2>/dev/null || echo 0)"
+  if [ "$running" != "true" ] || [ "${restarts:-0}" -gt 0 ]; then
+    warn "container is not healthy — recent logs:"
+    docker logs --tail 20 next-socks5 >&2 2>/dev/null || true
+    err "container failed to start (often: port ${PORT} already in use by another install — check 'ss -tlnp | grep ${PORT}')"
+  fi
   STARTED="yes"
   MANAGE_HINT="cd ${DEPLOY_DIR} && ${compose} logs -f | ${compose} down"
 }
