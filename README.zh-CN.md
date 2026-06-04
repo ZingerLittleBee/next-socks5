@@ -8,6 +8,8 @@
 实时终端仪表盘,并提供适合容器的无界面(headless)模式。协议为手写实现,依赖
 刻意保持精简。
 
+![next-socks5 仪表盘](snapshot.gif)
+
 ## 特性
 
 - **SOCKS5 命令** —— `CONNECT` 与 `UDP ASSOCIATE`(RFC 1928)。`BIND` 按设计以

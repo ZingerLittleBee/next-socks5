@@ -8,6 +8,8 @@ A lightweight, scalable **SOCKS5 server** written in Rust (RFC 1928 + RFC 1929),
 with a live terminal dashboard and a headless mode for containers. The protocol
 is hand-written; the dependency footprint is kept deliberately small.
 
+![next-socks5 dashboard](snapshot.gif)
+
 ## Features
 
 - **SOCKS5 commands** — `CONNECT` and `UDP ASSOCIATE` (RFC 1928). `BIND` is
