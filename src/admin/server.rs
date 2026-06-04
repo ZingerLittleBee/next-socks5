@@ -29,8 +29,25 @@ pub async fn serve(
     mut shutdown: watch::Receiver<bool>,
     listen_addr: Option<String>,
 ) -> std::io::Result<()> {
+    // Ensure the parent directory exists (the default /run/next-socks5 may not).
+    // Only a directory we create ourselves is chmod'd 0700 — never an existing,
+    // possibly shared, directory like /run.
+    if let Some(parent) = socket_path.parent() {
+        if !parent.as_os_str().is_empty() && !parent.exists() {
+            std::fs::create_dir_all(parent)?;
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(parent, std::fs::Permissions::from_mode(0o700));
+        }
+    }
     unlink_if_socket(socket_path)?;
     let listener = UnixListener::bind(socket_path)?;
+    // The admin stream carries sensitive telemetry (client IPs, targets, usage,
+    // usernames) and has no application-level auth, so restrict the socket to
+    // the owner only rather than relying on the process umask.
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(socket_path, std::fs::Permissions::from_mode(0o600))?;
+    }
 
     loop {
         tokio::select! {
