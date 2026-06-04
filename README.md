@@ -8,6 +8,8 @@ A lightweight, scalable **SOCKS5 server** written in Rust (RFC 1928 + RFC 1929),
 with a live terminal dashboard and a headless mode for containers. The protocol
 is hand-written; the dependency footprint is kept deliberately small.
 
+![next-socks5 dashboard](snapshot.gif)
+
 ## Features
 
 - **SOCKS5 commands** — `CONNECT` and `UDP ASSOCIATE` (RFC 1928). `BIND` is
@@ -362,6 +364,15 @@ socket and attach to the same path:
 next-socks5 serve --no-tui --admin-socket /tmp/ns5.sock
 next-socks5 attach --socket /tmp/ns5.sock
 ```
+
+## Performance
+
+On a single 4-core cloud VM (loopback), next-socks5 relays at **~2 GB/s** with
+**~1.6 ms** of added per-request latency and **~6k new connections/s**, and
+profiling shows the proxy is kernel/network-bound with no lock contention — i.e.
+the proxy itself is not the bottleneck. See
+[`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) for the methodology, the reproducible
+harness ([`tests/scripts/`](tests/scripts/)), and full numbers.
 
 ## License
 

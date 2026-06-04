@@ -8,6 +8,8 @@
 实时终端仪表盘,并提供适合容器的无界面(headless)模式。协议为手写实现,依赖
 刻意保持精简。
 
+![next-socks5 仪表盘](snapshot.gif)
+
 ## 特性
 
 - **SOCKS5 命令** —— `CONNECT` 与 `UDP ASSOCIATE`(RFC 1928)。`BIND` 按设计以
@@ -347,6 +349,13 @@ next-socks5 attach --socket /tmp/ns5.sock
 next-socks5 serve --no-tui --admin-socket /tmp/ns5.sock
 next-socks5 attach --socket /tmp/ns5.sock
 ```
+
+## 性能
+
+在单台 4 核云主机(loopback)上,next-socks5 中继吞吐 **~2 GB/s**、每请求附加延迟
+**~1.6 ms**、新建连接 **~6k/s**;剖析显示代理受内核/网络栈而非自身限制、无锁争用
+—— 即代理本身不是瓶颈。方法论、可复跑脚本([`tests/scripts/`](tests/scripts/))与
+完整数据见 [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md)。
 
 ## 许可证
 
