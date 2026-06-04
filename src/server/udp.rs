@@ -13,7 +13,7 @@ use std::time::Duration;
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
 use tokio::net::{TcpStream, UdpSocket};
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, watch};
 
 use crate::config::Config;
 use crate::metrics::{ConnKind, Event, Metrics};
@@ -39,6 +39,7 @@ pub async fn run(
     cfg: Arc<Config>,
     metrics: Arc<Metrics>,
     events: broadcast::Sender<Event>,
+    mut shutdown: watch::Receiver<bool>,
 ) {
     // 1. Determine the IP the client can reach us on, and bind a UDP socket on
     //    an ephemeral port of that IP. Never advertise an unspecified address.
@@ -217,6 +218,13 @@ pub async fn run(
                     // Unexpected data on the control channel is ignored; keep
                     // relaying as long as the connection stays open.
                     Ok(_) => {}
+                }
+            }
+
+            // Branch C: server shutdown requested; tear the association down.
+            res = shutdown.changed() => {
+                if res.is_err() || *shutdown.borrow() {
+                    break;
                 }
             }
         }

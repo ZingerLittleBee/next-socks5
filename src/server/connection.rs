@@ -40,7 +40,8 @@ enum ReadFail {
 /// Drive a single client connection through the SOCKS5 state machine.
 ///
 /// `_permit` keeps the connection counted against the accept-time admission caps
-/// for its whole lifetime.
+/// for its whole lifetime. `shutdown` is forwarded into the relays so an active
+/// transfer winds down on server shutdown.
 #[allow(clippy::too_many_arguments)]
 pub async fn handle(
     mut stream: TcpStream,
@@ -48,7 +49,7 @@ pub async fn handle(
     cfg: Arc<Config>,
     metrics: Arc<Metrics>,
     events: broadcast::Sender<Event>,
-    _shutdown: watch::Receiver<bool>,
+    shutdown: watch::Receiver<bool>,
     _permit: Permit,
 ) {
     // The entire pre-relay negotiation (greeting, optional auth, request) is
@@ -69,12 +70,12 @@ pub async fn handle(
     // via the admission permit, so no post-request check is needed here.
     match request.command {
         Command::Connect => {
-            connect::run(stream, request.address, cfg, metrics, events, peer).await;
+            connect::run(stream, request.address, cfg, metrics, events, peer, shutdown).await;
         }
         Command::UdpAssociate => {
             // The TCP stream becomes the control connection that owns the UDP
             // association; the relay runs until the control connection closes.
-            super::udp::run(stream, peer, cfg, metrics, events).await;
+            super::udp::run(stream, peer, cfg, metrics, events, shutdown).await;
         }
         Command::Bind => {
             // BIND is intentionally unsupported per the project spec.

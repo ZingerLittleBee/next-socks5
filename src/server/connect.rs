@@ -8,7 +8,7 @@ use std::time::Duration;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, watch};
 use tokio::time::Instant;
 
 use crate::config::Config;
@@ -18,6 +18,9 @@ use crate::protocol::address::Address;
 use crate::protocol::reply::{encode_reply, REP_SUCCEEDED};
 
 /// Handle a CONNECT request: dial `target` and relay bytes to/from `client`.
+///
+/// `shutdown` cancels an in-flight relay on server shutdown.
+#[allow(clippy::too_many_arguments)]
 pub async fn run(
     mut client: TcpStream,
     target: Address,
@@ -25,6 +28,7 @@ pub async fn run(
     metrics: Arc<Metrics>,
     events: broadcast::Sender<Event>,
     peer: SocketAddr,
+    mut shutdown: watch::Receiver<bool>,
 ) {
     let target_str = address_to_string(&target);
     let connect_timeout = Duration::from_millis(cfg.timeouts.connect_ms);
@@ -104,13 +108,31 @@ pub async fn run(
         kind: ConnKind::Connect,
     });
 
-    // 5. Relay until either side closes or the idle timeout fires.
+    // 5. Relay both directions until either side closes, the idle timeout
+    //    fires, or shutdown is requested.
     let idle = Duration::from_millis(cfg.timeouts.tcp_idle_ms);
-    let _ = copy_bidirectional_counted(&mut client, &mut upstream, idle, &metrics, id).await;
+    let relay = copy_bidirectional_counted(&mut client, &mut upstream, idle, &metrics, id);
+    tokio::select! {
+        _ = relay => {}
+        // Server shutdown: stop relaying; the streams close as run() returns.
+        _ = wait_for_shutdown(&mut shutdown) => {}
+    }
 
     metrics.record_success();
     metrics.unregister(id);
     let _ = events.send(Event::Closed { id });
+}
+
+/// Resolve once `shutdown` is true (or its sender is dropped).
+async fn wait_for_shutdown(shutdown: &mut watch::Receiver<bool>) {
+    if *shutdown.borrow() {
+        return;
+    }
+    while shutdown.changed().await.is_ok() {
+        if *shutdown.borrow() {
+            return;
+        }
+    }
 }
 
 /// Resolve a SOCKS5 [`Address`] to a single [`SocketAddr`].

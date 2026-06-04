@@ -84,6 +84,28 @@ async fn start_server(cfg: Config) -> std::net::SocketAddr {
     start_server_returning_metrics(cfg).await.0
 }
 
+/// Start the proxy and return the shutdown sender so a test can request a
+/// graceful shutdown and observe in-flight relays winding down.
+async fn start_server_with_shutdown(
+    cfg: Config,
+) -> (std::net::SocketAddr, Arc<Metrics>, watch::Sender<bool>) {
+    let cfg = Arc::new(cfg);
+    let listener = TcpListener::bind(&cfg.listen).await.unwrap();
+    let proxy_addr = listener.local_addr().unwrap();
+    let metrics = Metrics::new();
+    let (events, _events_rx) = broadcast::channel(64);
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    std::mem::forget(_events_rx);
+    tokio::spawn(server::run(
+        listener,
+        cfg.clone(),
+        metrics.clone(),
+        events.clone(),
+        shutdown_rx,
+    ));
+    (proxy_addr, metrics, shutdown_tx)
+}
+
 /// Drive a no-auth greeting and assert the server selects NO-AUTH.
 async fn no_auth_handshake(client: &mut TcpStream) {
     client.write_all(&[0x05, 0x01, 0x00]).await.unwrap();
@@ -462,4 +484,62 @@ async fn per_ip_limit_caps_connections_from_one_source() {
         _ => panic!("BUG: per-IP limit not enforced"),
     }
     drop(c1);
+}
+
+// ---------------------------------------------------------------------------
+// #7 — graceful shutdown aborts in-flight relays
+// ---------------------------------------------------------------------------
+
+/// On shutdown, an established but idle relay must wind down promptly rather than
+/// surviving until process teardown.
+#[tokio::test]
+async fn shutdown_aborts_in_flight_relay() {
+    // A target that accepts and holds the connection open, idle.
+    let target = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let target_addr = target.local_addr().unwrap();
+    tokio::spawn(async move {
+        if let Ok((sock, _)) = target.accept().await {
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            drop(sock);
+        }
+    });
+
+    let (proxy_addr, metrics, shutdown) = start_server_with_shutdown(no_auth_config()).await;
+
+    let mut client = TcpStream::connect(proxy_addr).await.unwrap();
+    no_auth_handshake(&mut client).await;
+    client
+        .write_all(&connect_v4_request(target_addr))
+        .await
+        .unwrap();
+    let mut reply = [0u8; 10];
+    client.read_exact(&mut reply).await.unwrap();
+    assert_eq!(reply[1], 0x00, "CONNECT should succeed");
+
+    // Wait until the relay is registered active (default idle is 5min, so it
+    // will not self-close).
+    let mut active = 0;
+    for _ in 0..40 {
+        active = metrics.active();
+        if active == 1 {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    assert_eq!(active, 1, "relay should be active before shutdown");
+
+    // Request shutdown; the in-flight relay must wind down.
+    shutdown.send(true).unwrap();
+    let mut ended = u64::MAX;
+    for _ in 0..40 {
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        ended = metrics.active();
+        if ended == 0 {
+            break;
+        }
+    }
+    assert_eq!(
+        ended, 0,
+        "BUG: shutdown did not abort the in-flight relay (active stayed {ended})"
+    );
 }
