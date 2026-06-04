@@ -7,9 +7,21 @@ username = "alice"
 password = "secret"
 
 [timeouts]
-connect_ms = 10000
-tcp_idle_ms = 300000
-udp_idle_ms = 60000
+handshake_ms = 10000       # deadline for greeting + auth + request (anti-slowloris)
+connect_ms = 10000         # upstream dial + DNS resolution budget
+tcp_idle_ms = 300000       # relay idle timeout (both directions idle)
+udp_idle_ms = 60000        # UDP association idle timeout
 
 [limits]
-max_connections = 1024     # optional
+max_connections = 1024     # optional: cap on concurrent connections, enforced at
+                           # accept time (half-open handshakes count too)
+# max_per_ip = 64          # optional: cap on concurrent connections per source IP
+udp_max_targets = 1024     # distinct targets tracked per UDP association
+# udp_rate_pps = 5000      # optional: outbound datagrams/sec per association
+
+# Egress policy guards against SSRF / open-relay abuse. Secure by default: all
+# blocked. Set a class to false to allow it (e.g. an internal LAN proxy).
+[egress]
+block_loopback = true      # 127.0.0.0/8, ::1
+block_link_local = true    # 169.254.0.0/16 (cloud metadata), fe80::/10
+block_private = true       # 10/8, 172.16/12, 192.168/16, fc00::/7

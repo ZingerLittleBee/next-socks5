@@ -26,6 +26,9 @@ pub struct Config {
     /// Admin/attach endpoint settings.
     #[serde(default)]
     pub admin: AdminConfig,
+    /// Egress (destination) policy guarding against SSRF / open-relay abuse.
+    #[serde(default)]
+    pub egress: Egress,
 }
 
 /// Admin/attach (local Unix socket) configuration.
@@ -89,7 +92,11 @@ pub struct User {
 /// Timeout settings, all in milliseconds.
 #[derive(Debug, Clone, Copy, serde::Deserialize, PartialEq, Eq)]
 pub struct Timeouts {
-    /// Timeout for establishing the upstream connection.
+    /// Deadline for the whole pre-relay phase (greeting, auth, request). Bounds
+    /// slow/stalled clients so a half-open handshake cannot pin a task forever.
+    #[serde(default = "default_handshake_ms")]
+    pub handshake_ms: u64,
+    /// Timeout for establishing the upstream connection (also bounds DNS).
     pub connect_ms: u64,
     /// Idle timeout for TCP relays.
     pub tcp_idle_ms: u64,
@@ -97,9 +104,15 @@ pub struct Timeouts {
     pub udp_idle_ms: u64,
 }
 
+/// Default pre-relay handshake/auth/request deadline.
+fn default_handshake_ms() -> u64 {
+    10_000
+}
+
 impl Default for Timeouts {
     fn default() -> Self {
         Self {
+            handshake_ms: default_handshake_ms(),
             connect_ms: 10_000,
             tcp_idle_ms: 300_000,
             udp_idle_ms: 60_000,
@@ -108,11 +121,122 @@ impl Default for Timeouts {
 }
 
 /// Resource limits.
-#[derive(Debug, Clone, Copy, serde::Deserialize, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, serde::Deserialize, PartialEq, Eq)]
 pub struct Limits {
     /// Maximum number of concurrent connections (unbounded when `None`).
+    /// Enforced at accept time, counting half-open/handshaking connections too.
     #[serde(default)]
     pub max_connections: Option<usize>,
+    /// Maximum concurrent connections from a single source IP (unbounded when
+    /// `None`). Enforced at accept time alongside `max_connections`.
+    #[serde(default)]
+    pub max_per_ip: Option<usize>,
+    /// Maximum distinct targets tracked per UDP association before the oldest is
+    /// evicted, bounding per-association memory.
+    #[serde(default = "default_udp_max_targets")]
+    pub udp_max_targets: usize,
+    /// Optional cap on outbound datagrams per second per UDP association,
+    /// limiting reflection/flood abuse. `None` leaves it unlimited.
+    #[serde(default)]
+    pub udp_rate_pps: Option<u32>,
+}
+
+/// Default per-association distinct-target cap for UDP relays.
+fn default_udp_max_targets() -> usize {
+    1024
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Self {
+            max_connections: None,
+            max_per_ip: None,
+            udp_max_targets: default_udp_max_targets(),
+            udp_rate_pps: None,
+        }
+    }
+}
+
+/// Egress (destination) policy. Blocks SOCKS targets that resolve to
+/// internal/metadata addresses, mitigating SSRF and open-relay abuse. Each
+/// class can be individually disabled for trusted deployments (e.g. an internal
+/// LAN proxy). Secure by default: all classes blocked.
+#[derive(Debug, Clone, Copy, serde::Deserialize, PartialEq, Eq)]
+pub struct Egress {
+    /// Block loopback (127.0.0.0/8, ::1).
+    #[serde(default = "default_true")]
+    pub block_loopback: bool,
+    /// Block link-local (169.254.0.0/16 incl. cloud metadata, fe80::/10).
+    #[serde(default = "default_true")]
+    pub block_link_local: bool,
+    /// Block private ranges (10/8, 172.16/12, 192.168/16, fc00::/7).
+    #[serde(default = "default_true")]
+    pub block_private: bool,
+}
+
+impl Default for Egress {
+    fn default() -> Self {
+        Self {
+            block_loopback: true,
+            block_link_local: true,
+            block_private: true,
+        }
+    }
+}
+
+impl Egress {
+    /// A permissive policy that allows every destination (used by tests and by
+    /// operators who explicitly opt out of egress filtering).
+    pub fn permissive() -> Self {
+        Self {
+            block_loopback: false,
+            block_link_local: false,
+            block_private: false,
+        }
+    }
+
+    /// Whether a resolved destination IP is blocked by this policy.
+    ///
+    /// The unspecified address (`0.0.0.0` / `::`) is always blocked. Native IPv6
+    /// classes are evaluated first; any IPv4-in-IPv6 form (`::ffff:a.b.c.d`
+    /// mapped or `::a.b.c.d` compatible) is then folded down to IPv4 so it cannot
+    /// bypass the v4 rules. `block_loopback` also covers `0.0.0.0/8` ("this
+    /// network", which several stacks route to localhost); `block_private` also
+    /// covers CGNAT `100.64.0.0/10`.
+    pub fn is_blocked(&self, ip: std::net::IpAddr) -> bool {
+        use std::net::IpAddr;
+        // Honor native IPv6 classes first, then fold any IPv4-in-IPv6 form down
+        // to IPv4 for the v4 rules.
+        let ip = match ip {
+            IpAddr::V6(v6) => {
+                if v6.is_unspecified()
+                    || (self.block_loopback && v6.is_loopback())
+                    || (self.block_link_local && (v6.segments()[0] & 0xffc0) == 0xfe80)
+                    || (self.block_private && (v6.segments()[0] & 0xfe00) == 0xfc00)
+                {
+                    return true;
+                }
+                match v6.to_ipv4() {
+                    Some(v4) => IpAddr::V4(v4),
+                    // A global/other IPv6 address: allowed.
+                    None => return false,
+                }
+            }
+            v4 => v4,
+        };
+        match ip {
+            IpAddr::V4(v4) => {
+                let o = v4.octets();
+                v4.is_unspecified()
+                    || (self.block_loopback && (v4.is_loopback() || o[0] == 0))
+                    || (self.block_link_local && v4.is_link_local())
+                    || (self.block_private
+                        && (v4.is_private() || (o[0] == 100 && (o[1] & 0xc0) == 64)))
+            }
+            // Unreachable: every IPv6 path above returned or normalized to IPv4.
+            IpAddr::V6(_) => false,
+        }
+    }
 }
 
 /// Command-line arguments.
@@ -196,6 +320,7 @@ impl Config {
             limits: Limits::default(),
             public_addr: None,
             admin: AdminConfig::default(),
+            egress: Egress::default(),
         }
     }
 }
@@ -342,5 +467,50 @@ max_connections = 1024
         let none = Config::from_toml_str("listen = \"x\"\n[auth]\nmethod = \"none\"")
             .expect("should parse");
         assert_eq!(none.auth.method, AuthMethod::None);
+    }
+
+    #[test]
+    fn egress_default_blocks_internal_destinations() {
+        use std::net::IpAddr;
+        let e = Egress::default();
+        // Loopback, link-local (incl. cloud metadata), private, CGNAT, 0/8.
+        for s in [
+            "127.0.0.1",
+            "169.254.169.254",
+            "10.0.0.1",
+            "172.16.0.1",
+            "192.168.1.1",
+            "100.64.0.1",
+            "0.0.0.1",
+            "0.0.0.0",
+            "::1",
+            "fe80::1",
+            "fc00::1",
+            "::ffff:127.0.0.1",
+            "::ffff:169.254.169.254",
+        ] {
+            let ip: IpAddr = s.parse().unwrap();
+            assert!(e.is_blocked(ip), "{s} should be blocked by default");
+        }
+    }
+
+    #[test]
+    fn egress_default_allows_public_destinations() {
+        use std::net::IpAddr;
+        let e = Egress::default();
+        for s in ["8.8.8.8", "1.1.1.1", "93.184.216.34", "2001:4860:4860::8888"] {
+            let ip: IpAddr = s.parse().unwrap();
+            assert!(!e.is_blocked(ip), "{s} should be allowed by default");
+        }
+    }
+
+    #[test]
+    fn egress_permissive_allows_loopback() {
+        use std::net::IpAddr;
+        let e = Egress::permissive();
+        assert!(!e.is_blocked("127.0.0.1".parse::<IpAddr>().unwrap()));
+        assert!(!e.is_blocked("10.0.0.1".parse::<IpAddr>().unwrap()));
+        // The unspecified address is blocked regardless of policy.
+        assert!(e.is_blocked("0.0.0.0".parse::<IpAddr>().unwrap()));
     }
 }

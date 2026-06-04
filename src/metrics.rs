@@ -143,7 +143,7 @@ impl Metrics {
             up: 0,
             down: 0,
         };
-        self.registry.lock().unwrap().insert(id, info);
+        self.registry.lock().unwrap_or_else(|e| e.into_inner()).insert(id, info);
         id
     }
 
@@ -151,14 +151,14 @@ impl Metrics {
     /// registry. No-op for unknown ids beyond the active-count decrement.
     pub fn unregister(&self, id: u64) {
         self.active_conns.fetch_sub(1, Ordering::Relaxed);
-        self.registry.lock().unwrap().remove(&id);
+        self.registry.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
     }
 
     /// Add `n` to the global upload counter and to the per-connection upload
     /// counter (if the connection is still in the registry).
     pub fn add_up(&self, id: u64, n: u64) {
         self.bytes_up.fetch_add(n, Ordering::Relaxed);
-        if let Some(info) = self.registry.lock().unwrap().get_mut(&id) {
+        if let Some(info) = self.registry.lock().unwrap_or_else(|e| e.into_inner()).get_mut(&id) {
             info.up += n;
         }
     }
@@ -167,7 +167,7 @@ impl Metrics {
     /// download counter (if the connection is still in the registry).
     pub fn add_down(&self, id: u64, n: u64) {
         self.bytes_down.fetch_add(n, Ordering::Relaxed);
-        if let Some(info) = self.registry.lock().unwrap().get_mut(&id) {
+        if let Some(info) = self.registry.lock().unwrap_or_else(|e| e.into_inner()).get_mut(&id) {
             info.down += n;
         }
     }
@@ -210,7 +210,7 @@ impl Metrics {
 
     /// Clone the current list of active connections (for the TUI table).
     pub fn connections(&self) -> Vec<ConnInfo> {
-        self.registry.lock().unwrap().values().cloned().collect()
+        self.registry.lock().unwrap_or_else(|e| e.into_inner()).values().cloned().collect()
     }
 
     /// Current number of active connections.

@@ -1,5 +1,7 @@
 # next-socks5
 
+**English** | [简体中文](README.zh-CN.md)
+
 [![build](https://github.com/zinger-labs/next-socks5/actions/workflows/build.yml/badge.svg)](https://github.com/zinger-labs/next-socks5/actions/workflows/build.yml)
 
 A lightweight, scalable **SOCKS5 server** written in Rust (RFC 1928 + RFC 1929),
@@ -44,15 +46,42 @@ curl -fsSL https://raw.githubusercontent.com/zinger-labs/next-socks5/main/instal
 
 # With options (note the `-s --` to pass args through curl | sh):
 curl -fsSL https://raw.githubusercontent.com/zinger-labs/next-socks5/main/install.sh \
-  | sh -s -- --method docker --auth --port 1080
+  | sh -s -- --port 1080
 ```
 
-Or clone and run locally:
+Or clone and run locally. Each example is annotated below; in auth mode with no
+`--user` / `--pass`, the installer generates a username and a 20-character
+password and prints them at the end, together with a ready-to-use `socks5://`
+URL and a `curl` test command.
 
 ```bash
+# Show every flag and exit
 ./install.sh --help
+
+# Simplest run: binary install, auth ON (auto-generated user/password), random free port
+./install.sh
+
+# Docker instead of a native binary (host networking, so UDP ASSOCIATE works)
+./install.sh --method docker
+
+# Open proxy (no auth) on a fixed port — only on a trusted network
 ./install.sh --method binary --no-auth --port 1080
+
+# Explicit credentials on a fixed port
 ./install.sh --method docker --auth --user alice --pass secret --port 1080
+
+# Bind to a single interface instead of 0.0.0.0 (here: localhost only)
+./install.sh --no-auth --listen 127.0.0.1 --port 1080
+
+# Pin a specific release instead of `latest`
+./install.sh --version v0.2.0 --port 1080
+
+# Install the binary + config only — do NOT create or start a service
+./install.sh --no-service --port 1080            # same as: NO_SERVICE=1 ./install.sh --port 1080
+
+# Custom location: binary install dir (binary) / compose deploy dir (docker)
+./install.sh --bin-dir /opt/bin --port 1080
+./install.sh --method docker --dir ./ns5 --port 1080
 ```
 
 | Flag | Description | Default |
@@ -63,6 +92,8 @@ Or clone and run locally:
 | `--port <port>` | Listen port (random free port if omitted) | random |
 | `--listen <addr>` | Bind address | `0.0.0.0` |
 | `--version <tag>` | Release version, e.g. `v0.1.0` | `latest` |
+| `--bin-dir <dir>` | Binary install directory (binary method) | `/usr/local/bin` |
+| `--dir <dir>` | Docker deploy directory (docker method) | `./next-socks5-deploy` |
 | `--no-service` | Install binary + config only; don't set up/start a service | off |
 
 > Binary install targets Linux (musl x86_64 / aarch64) and sets up a **systemd**
@@ -72,6 +103,18 @@ Or clone and run locally:
 > installer is POSIX `sh` (no bash required).
 
 ### Option 2 — Docker
+
+Fastest — let the installer generate `docker-compose.yml` + `config.toml` and
+start the container for you (host networking; with `--auth` and no `--user` /
+`--pass`, credentials are auto-generated and printed at the end):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/zinger-labs/next-socks5/main/install.sh \
+  | sh -s -- --method docker --auth --port 1080
+```
+
+This writes both files into `./next-socks5-deploy/` (override with `--dir`) and
+runs `docker compose up -d`. To wire it up manually instead:
 
 ```bash
 # No-auth, host networking (UDP ASSOCIATE works), listening on 1080:
@@ -163,12 +206,14 @@ username = "bob"
 password = "hunter2"
 
 [timeouts]
+handshake_ms = 10000       # greeting+auth+request deadline (anti-slowloris)
 connect_ms = 10000
 tcp_idle_ms = 300000
 udp_idle_ms = 60000
 
 [limits]
-max_connections = 1024     # optional
+max_connections = 2048     # optional: global concurrent cap (unbounded if unset)
+max_per_ip = 64            # optional: per-source-IP concurrent cap (unbounded if unset)
 
 [admin]
 enabled = true             # local attach endpoint (default on)
@@ -182,6 +227,29 @@ single port; you do not need a separate port per user. With `method = "none"` th
 proxy is open and the `users` list is ignored. (The dashboard logs each auth
 attempt as `auth ok/failed for '<user>'`; per-user traffic accounting is not yet
 shown in the connections table.)
+
+**Connection limits.** Both caps under `[limits]` are **optional and unbounded by
+default**; the server enforces them at accept time, so half-open/handshaking
+connections count too. They are not set automatically — opt in via the config:
+
+- `max_connections` — global cap on concurrent connections; a backstop against
+  file-descriptor / task exhaustion. Size it to your host (the OS `RLIMIT_NOFILE`
+  is the ultimate ceiling; each CONNECT relay uses ~2 fds).
+- `max_per_ip` — concurrent connections from a single source IP. Stops one client
+  from monopolizing the proxy or brute-forcing credentials at high concurrency. A
+  generous value (e.g. 64–256) does not affect normal clients; lower it only if you
+  do not expect many users behind a single NAT.
+
+For an **internet-facing** deployment, set both. The proxy has no built-in auth
+rate-limiting, so also front the listen port with a host firewall / fail2ban when
+it is publicly exposed.
+
+**Secure defaults.** Egress filtering is **on by default**: the proxy refuses to
+relay to loopback, link-local (including the `169.254.169.254` cloud-metadata
+address), and private/RFC1918 ranges (an SSRF / open-relay guard). If you genuinely
+need to reach internal targets, relax it with an `[egress]` section — see
+[`config.example.toml`](config.example.toml). The pre-relay handshake is bounded by
+`timeouts.handshake_ms` (default 10s) to drop slowloris-style stalled clients.
 
 ### CLI
 
