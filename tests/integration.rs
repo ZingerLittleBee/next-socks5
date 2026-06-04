@@ -511,17 +511,17 @@ async fn unknown_atype_replies_0x08() {
 }
 
 #[tokio::test]
-async fn connection_limit_replies_0x02() {
+async fn connection_over_limit_is_dropped_at_accept() {
     let scenario = async {
         // Upstream echo target that stays connected.
         let echo_addr = spawn_echo_server().await;
 
-        // Config with no auth and a hard cap of one active connection.
+        // Config with no auth and a hard cap of one concurrent connection.
         let mut cfg = no_auth_config();
         cfg.limits.max_connections = Some(1);
         let proxy_addr = start_server_with_config(cfg).await;
 
-        // Connection #1: drive into an active relay so metrics.active() == 1.
+        // Connection #1: drive into an active relay so it holds the only slot.
         let mut client1 = TcpStream::connect(proxy_addr).await.unwrap();
         client1.write_all(&[0x05, 0x01, 0x00]).await.unwrap();
         let mut method_reply = [0u8; 2];
@@ -534,32 +534,21 @@ async fn connection_limit_replies_0x02() {
         let mut reply1 = [0u8; 10];
         client1.read_exact(&mut reply1).await.unwrap();
         assert_eq!(reply1[1], 0x00, "connection #1 should succeed");
-        // Confirm #1 is genuinely active via an echo round-trip; registration
-        // happens before the relay, so a successful round-trip proves active==1.
         client1.write_all(b"ping").await.unwrap();
         let mut echoed = [0u8; 4];
         client1.read_exact(&mut echoed).await.unwrap();
         assert_eq!(&echoed, b"ping");
-        // Small settle to ensure the registry has the entry deterministically.
         tokio::time::sleep(Duration::from_millis(50)).await;
 
-        // Connection #2: handshake + CONNECT should be rejected over the limit.
+        // Connection #2: now over the cap, it is dropped at accept time (before
+        // any handshake), so its greeting gets no reply — the read sees EOF.
         let mut client2 = TcpStream::connect(proxy_addr).await.unwrap();
-        client2.write_all(&[0x05, 0x01, 0x00]).await.unwrap();
+        let _ = client2.write_all(&[0x05, 0x01, 0x00]).await;
         let mut method_reply2 = [0u8; 2];
-        client2.read_exact(&mut method_reply2).await.unwrap();
-        assert_eq!(method_reply2, [0x05, 0x00]);
-        client2
-            .write_all(&connect_v4_request(echo_addr))
-            .await
-            .unwrap();
-        let mut reply2 = [0u8; 10];
-        client2.read_exact(&mut reply2).await.unwrap();
-        assert_eq!(reply2[0], 0x05);
-        assert_eq!(
-            reply2[1], 0x02,
-            "over-limit connection should reply not allowed (0x02)"
-        );
+        match client2.read_exact(&mut method_reply2).await {
+            Err(_) => {} // EOF/reset: dropped at accept as expected
+            Ok(_) => panic!("over-limit connection should have been dropped at accept"),
+        }
 
         // Keep connection #1 alive until the assertion on #2 is complete.
         drop(client1);

@@ -407,3 +407,59 @@ async fn malformed_auth_gets_failure_reply_before_close() {
         Err(_) => panic!("BUG: malformed auth produced no reply within 2s"),
     }
 }
+
+// ---------------------------------------------------------------------------
+// #22 / #16 — accept-time admission control
+// ---------------------------------------------------------------------------
+
+/// A connection still in the handshake (half-open) must count toward
+/// max_connections, so a half-open flood cannot bypass the cap. With a cap of 1
+/// and one half-open connection holding the slot, a second connection is dropped
+/// at accept (no greeting reply).
+#[tokio::test]
+async fn half_open_handshake_counts_toward_connection_limit() {
+    let mut cfg = no_auth_config();
+    cfg.limits.max_connections = Some(1);
+    cfg.timeouts.handshake_ms = 5_000; // keep the half-open alive during the test
+    let proxy_addr = start_server(cfg).await;
+
+    // conn#1: send only a partial greeting and stall, holding the single slot.
+    let mut c1 = TcpStream::connect(proxy_addr).await.unwrap();
+    c1.write_all(&[0x05, 0x01]).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(150)).await;
+
+    // conn#2: over the cap, dropped at accept; its greeting gets no reply.
+    let mut c2 = TcpStream::connect(proxy_addr).await.unwrap();
+    let _ = c2.write_all(&[0x05, 0x01, 0x00]).await;
+    let mut reply = [0u8; 2];
+    match tokio::time::timeout(Duration::from_secs(2), c2.read_exact(&mut reply)).await {
+        Ok(Err(_)) => {} // EOF/reset — half-open was counted, c2 dropped
+        Ok(Ok(_)) => panic!("BUG: half-open connection not counted; over-limit conn got a reply"),
+        Err(_) => panic!("BUG: half-open connection not counted; over-limit conn left hanging"),
+    }
+    drop(c1);
+}
+
+/// A per-IP cap limits concurrent connections from one source independently of
+/// the global cap.
+#[tokio::test]
+async fn per_ip_limit_caps_connections_from_one_source() {
+    let mut cfg = no_auth_config();
+    cfg.limits.max_per_ip = Some(1);
+    cfg.timeouts.handshake_ms = 5_000;
+    let proxy_addr = start_server(cfg).await;
+
+    let mut c1 = TcpStream::connect(proxy_addr).await.unwrap();
+    c1.write_all(&[0x05, 0x01]).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(150)).await;
+
+    // Same source IP (127.0.0.1); the second connection is over the per-IP cap.
+    let mut c2 = TcpStream::connect(proxy_addr).await.unwrap();
+    let _ = c2.write_all(&[0x05, 0x01, 0x00]).await;
+    let mut reply = [0u8; 2];
+    match tokio::time::timeout(Duration::from_secs(2), c2.read_exact(&mut reply)).await {
+        Ok(Err(_)) => {}
+        _ => panic!("BUG: per-IP limit not enforced"),
+    }
+    drop(c1);
+}

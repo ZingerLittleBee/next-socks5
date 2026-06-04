@@ -21,6 +21,7 @@ use crate::protocol::handshake::{
 use crate::protocol::reply::encode_reply;
 use crate::protocol::request::{parse_request, Command, Request, RequestError};
 
+use super::admission::Permit;
 use super::connect;
 
 /// Maximum bytes we will buffer while reading a single protocol message.
@@ -37,6 +38,10 @@ enum ReadFail {
 }
 
 /// Drive a single client connection through the SOCKS5 state machine.
+///
+/// `_permit` keeps the connection counted against the accept-time admission caps
+/// for its whole lifetime.
+#[allow(clippy::too_many_arguments)]
 pub async fn handle(
     mut stream: TcpStream,
     peer: SocketAddr,
@@ -44,6 +49,7 @@ pub async fn handle(
     metrics: Arc<Metrics>,
     events: broadcast::Sender<Event>,
     _shutdown: watch::Receiver<bool>,
+    _permit: Permit,
 ) {
     // The entire pre-relay negotiation (greeting, optional auth, request) is
     // bounded by a single deadline so a slow/stalled client cannot pin this
@@ -59,19 +65,8 @@ pub async fn handle(
         Err(_) => return,
     };
 
-    // Enforce the connection limit (best-effort, checked after the request).
-    if let Some(limit) = cfg.limits.max_connections {
-        if metrics.active() >= limit as u64 {
-            reply_failure(&mut stream, Socks5Error::NotAllowed).await;
-            let _ = events.send(Event::Error {
-                code: Socks5Error::NotAllowed.reply_code(),
-                msg: "connection limit reached".to_string(),
-            });
-            return;
-        }
-    }
-
-    // Dispatch on the command.
+    // Dispatch on the command. The connection limit is enforced at accept time
+    // via the admission permit, so no post-request check is needed here.
     match request.command {
         Command::Connect => {
             connect::run(stream, request.address, cfg, metrics, events, peer).await;

@@ -124,8 +124,13 @@ impl Default for Timeouts {
 #[derive(Debug, Clone, Copy, serde::Deserialize, PartialEq, Eq)]
 pub struct Limits {
     /// Maximum number of concurrent connections (unbounded when `None`).
+    /// Enforced at accept time, counting half-open/handshaking connections too.
     #[serde(default)]
     pub max_connections: Option<usize>,
+    /// Maximum concurrent connections from a single source IP (unbounded when
+    /// `None`). Enforced at accept time alongside `max_connections`.
+    #[serde(default)]
+    pub max_per_ip: Option<usize>,
     /// Maximum distinct targets tracked per UDP association before the oldest is
     /// evicted, bounding per-association memory.
     #[serde(default = "default_udp_max_targets")]
@@ -145,6 +150,7 @@ impl Default for Limits {
     fn default() -> Self {
         Self {
             max_connections: None,
+            max_per_ip: None,
             udp_max_targets: default_udp_max_targets(),
             udp_rate_pps: None,
         }
