@@ -21,6 +21,10 @@ use crate::protocol::address::Address;
 use crate::protocol::reply::{encode_reply, REP_SUCCEEDED};
 use crate::protocol::udp::decap;
 
+/// Bound on a single relay `send_to`, so a saturated local send buffer cannot
+/// stall the select loop (and thus control-EOF detection / teardown).
+const UDP_SEND_TIMEOUT: Duration = Duration::from_secs(1);
+
 /// Maximum size of a single UDP datagram we are willing to buffer (64 KiB).
 const UDP_BUF: usize = 65536;
 
@@ -162,7 +166,15 @@ pub async fn run(
                     if cfg.egress.is_blocked(target.ip()) {
                         continue;
                     }
-                    if udp_sock.send_to(&datagram.data, target).await.is_ok() {
+                    let sent = matches!(
+                        tokio::time::timeout(
+                            UDP_SEND_TIMEOUT,
+                            udp_sock.send_to(&datagram.data, target),
+                        )
+                        .await,
+                        Ok(Ok(_))
+                    );
+                    if sent {
                         // Count only successful sends against the rate budget.
                         if rate_pps.is_some() {
                             window_count += 1;
@@ -184,7 +196,11 @@ pub async fn run(
                     if let Some(dst) = client_udp_addr {
                         let mut framed = Vec::with_capacity(n + 22);
                         crate::protocol::udp::encap(&addr_from_socket(src), &buf[..n], &mut framed);
-                        let _ = udp_sock.send_to(&framed, dst).await;
+                        // Bounded so a saturated local send buffer cannot stall
+                        // the select loop (and control-EOF detection).
+                        let _ =
+                            tokio::time::timeout(UDP_SEND_TIMEOUT, udp_sock.send_to(&framed, dst))
+                                .await;
                         metrics.add_down(id, n as u64);
                     }
                 }
