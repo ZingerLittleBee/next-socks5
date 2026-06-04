@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use next_socks5::admin::{serve, EventRing};
+use next_socks5::admin::{claim_socket, serve, EventRing};
 use next_socks5::config::{AuthConfig, AuthMethod, Config, Egress, Limits, Timeouts, User};
 use next_socks5::metrics::{Event, Metrics, MetricsSource};
 use next_socks5::server;
@@ -414,6 +414,100 @@ async fn admin_serve_creates_missing_parent_dir() {
         bound,
         "BUG: admin serve did not create the missing parent dir, bind failed"
     );
+}
+
+/// A second instance must NOT hijack an admin socket a live peer is serving.
+/// The original incident: a bare `next-socks5` started a second server whose
+/// admin endpoint unlinked + rebound the running service's `/run/next-socks5/
+/// admin.sock`, then deleted it on exit — leaving the live service with no
+/// reachable socket. The fix probes liveness with `connect()` and refuses.
+#[tokio::test]
+async fn live_admin_socket_is_not_hijacked_by_second_instance() {
+    let dir = unique_temp_path("hijack");
+    std::fs::create_dir_all(&dir).unwrap();
+    let sock = dir.join("admin.sock");
+
+    // First instance claims and holds the socket + its advisory lock.
+    let (listener1, _lock1) = claim_socket(&sock).await.expect("first claim binds");
+    assert!(sock.exists(), "first claim should create the socket");
+
+    // Second instance must refuse rather than unlink/rebind the live socket.
+    let err = claim_socket(&sock)
+        .await
+        .expect_err("BUG: second claim hijacked a live admin socket");
+    assert_eq!(
+        err.kind(),
+        std::io::ErrorKind::AddrInUse,
+        "expected AddrInUse refusal, got: {err}"
+    );
+
+    // The original endpoint is untouched: a fresh connect still succeeds.
+    tokio::net::UnixStream::connect(&sock)
+        .await
+        .expect("BUG: original admin socket no longer reachable after second claim");
+
+    drop(listener1);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A stale socket left by a crashed instance (file on disk, nobody listening)
+/// must be reclaimed by the next start — `connect()` returns ECONNREFUSED, so it
+/// is safe to unlink and rebind.
+#[tokio::test]
+async fn stale_admin_socket_is_reclaimed() {
+    let dir = unique_temp_path("stale");
+    std::fs::create_dir_all(&dir).unwrap();
+    let sock = dir.join("admin.sock");
+
+    // Simulate a crash: bind then drop, leaving the socket file but no listener.
+    {
+        let l = std::os::unix::net::UnixListener::bind(&sock).unwrap();
+        drop(l);
+    }
+    assert!(sock.exists(), "stale socket file should remain after drop");
+    assert!(
+        std::os::unix::net::UnixStream::connect(&sock).is_err(),
+        "stale socket must refuse connections (proves it is not live)"
+    );
+
+    // A fresh claim reclaims the stale path and binds a working socket.
+    let (_listener, _lock) = claim_socket(&sock)
+        .await
+        .expect("BUG: stale admin socket was not reclaimed");
+    tokio::net::UnixStream::connect(&sock)
+        .await
+        .expect("reclaimed socket should be live");
+
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The sidecar `<socket>.lock` advisory lock serializes racing starters, closing
+/// the TOCTOU window where two processes both decide the socket is stale. While
+/// one holder keeps the lock, a second claim must be refused even if the socket
+/// file itself is gone.
+#[tokio::test]
+async fn concurrent_claim_is_serialized_by_lock() {
+    let dir = unique_temp_path("lockrace");
+    std::fs::create_dir_all(&dir).unwrap();
+    let sock = dir.join("admin.sock");
+
+    // First claim binds the socket AND holds the advisory lock for its lifetime.
+    let (_l1, _lock1) = claim_socket(&sock).await.expect("first claim");
+
+    // Remove the socket file out from under the holder (it keeps the lock fd):
+    // a racing starter now sees no live socket (connect ENOENT) yet must still be
+    // blocked by the held lock instead of rebinding.
+    std::fs::remove_file(&sock).unwrap();
+    let err = claim_socket(&sock)
+        .await
+        .expect_err("BUG: lock did not serialize a second binder");
+    assert_eq!(
+        err.kind(),
+        std::io::ErrorKind::WouldBlock,
+        "expected WouldBlock from the held lock, got: {err}"
+    );
+
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 // ---------------------------------------------------------------------------

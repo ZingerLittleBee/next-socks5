@@ -173,9 +173,9 @@ field() { printf '%s:\n%s\n\n' "$1" "$2"; }
 print_manual_start() {
   STARTED="no"
   warn "service NOT started; start it manually with:"
-  warn "  ${BIN_DIR}/${BIN_NAME} --no-tui --config /etc/next-socks5/config.toml"
+  warn "  ${BIN_DIR}/${BIN_NAME} serve --no-tui --config /etc/next-socks5/config.toml"
   warn "without systemd/OpenRC it will NOT auto-start after a reboot"
-  MANAGE_HINT="start: ${BIN_DIR}/${BIN_NAME} --no-tui --config /etc/next-socks5/config.toml"
+  MANAGE_HINT="start: ${BIN_DIR}/${BIN_NAME} serve --no-tui --config /etc/next-socks5/config.toml"
 }
 
 # --- Argument parsing ---------------------------------------------------------
@@ -267,7 +267,7 @@ After=network.target
 # systemd credentials store, so the random service UID can read it without
 # widening the file's own permissions (the config holds the password).
 LoadCredential=config:/etc/next-socks5/config.toml
-ExecStart=${BIN_DIR}/${BIN_NAME} --no-tui --config %d/config
+ExecStart=${BIN_DIR}/${BIN_NAME} serve --no-tui --config %d/config
 Restart=on-failure
 DynamicUser=yes
 # Create /run/next-socks5 (writable by the DynamicUser, cleaned up on stop) for
@@ -298,7 +298,7 @@ EOF
 name="next-socks5"
 description="next-socks5 SOCKS5 server"
 command="${BIN_DIR}/${BIN_NAME}"
-command_args="--no-tui --config /etc/next-socks5/config.toml"
+command_args="serve --no-tui --config /etc/next-socks5/config.toml"
 command_background=true
 pidfile="/run/next-socks5.pid"
 output_log="/var/log/next-socks5.log"

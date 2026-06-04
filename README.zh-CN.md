@@ -155,7 +155,7 @@ musl 构建:
 curl -fL -o next-socks5.tar.gz \
   https://github.com/zinger-labs/next-socks5/releases/latest/download/next-socks5-x86_64-unknown-linux-musl.tar.gz
 tar xzf next-socks5.tar.gz
-./next-socks5-x86_64-unknown-linux-musl/next-socks5 --no-tui --listen 0.0.0.0:1080
+./next-socks5-x86_64-unknown-linux-musl/next-socks5 serve --no-tui --listen 0.0.0.0:1080
 ```
 
 (ARM64 把 `x86_64` 换成 `aarch64`。)
@@ -168,8 +168,8 @@ tar xzf next-socks5.tar.gz
 git clone https://github.com/zinger-labs/next-socks5
 cd next-socks5
 cargo build --release
-./target/release/next-socks5            # TUI 仪表盘
-./target/release/next-socks5 --no-tui   # 无界面
+./target/release/next-socks5 serve            # TUI 仪表盘
+./target/release/next-socks5 serve --no-tui   # 无界面
 
 # 仅无界面构建(去掉 TUI 依赖):
 cargo build --release --no-default-features
@@ -244,7 +244,8 @@ enabled = true             # 本地 attach 端点(默认开启)
 ### 命令行
 
 ```
-next-socks5 [OPTIONS]              运行服务器(默认)
+next-socks5                        打印帮助(裸命令不会启动服务器)
+next-socks5 serve [OPTIONS]        运行服务器(别名:run)
 next-socks5 attach [OPTIONS]       attach 到运行中的服务器仪表盘
 
 服务器选项:
@@ -275,7 +276,7 @@ curl --socks5 alice:secret@127.0.0.1:1080 https://example.com
 终端仪表盘默认开启 —— 只要运行服务器时不加 `--no-tui`:
 
 ```bash
-next-socks5 --listen 127.0.0.1:1080
+next-socks5 serve --listen 127.0.0.1:1080
 ```
 
 它展示实时吞吐量(含 30 秒趋势图)、成功/错误统计、可排序的 **活动连接** 表,以及
@@ -297,10 +298,10 @@ next-socks5 --listen 127.0.0.1:1080
 
 ```bash
 # 本地预览:打开仪表盘并持续生成模拟数据。
-cargo run --release -- --listen 127.0.0.1:1080 --mock
+cargo run --release -- serve --listen 127.0.0.1:1080 --mock
 
 # 或使用已安装的二进制:
-next-socks5 --listen 127.0.0.1:1080 --mock
+next-socks5 serve --listen 127.0.0.1:1080 --mock
 ```
 
 `--mock` 仅用于演示/测试;切勿在真实代理上启用。
@@ -343,7 +344,7 @@ next-socks5 attach --socket /tmp/ns5.sock
 不可写。用一个可写的 socket 启动服务器,并 attach 到同一路径:
 
 ```bash
-next-socks5 --no-tui --admin-socket /tmp/ns5.sock
+next-socks5 serve --no-tui --admin-socket /tmp/ns5.sock
 next-socks5 attach --socket /tmp/ns5.sock
 ```
 

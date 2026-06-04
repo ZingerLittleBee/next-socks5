@@ -160,7 +160,7 @@ Download a static musl build from the
 curl -fL -o next-socks5.tar.gz \
   https://github.com/zinger-labs/next-socks5/releases/latest/download/next-socks5-x86_64-unknown-linux-musl.tar.gz
 tar xzf next-socks5.tar.gz
-./next-socks5-x86_64-unknown-linux-musl/next-socks5 --no-tui --listen 0.0.0.0:1080
+./next-socks5-x86_64-unknown-linux-musl/next-socks5 serve --no-tui --listen 0.0.0.0:1080
 ```
 
 (Replace `x86_64` with `aarch64` for ARM64.)
@@ -173,8 +173,8 @@ Requires a recent stable Rust toolchain.
 git clone https://github.com/zinger-labs/next-socks5
 cd next-socks5
 cargo build --release
-./target/release/next-socks5            # TUI dashboard
-./target/release/next-socks5 --no-tui   # headless
+./target/release/next-socks5 serve            # TUI dashboard
+./target/release/next-socks5 serve --no-tui   # headless
 
 # Headless-only build (drops the TUI deps):
 cargo build --release --no-default-features
@@ -254,7 +254,8 @@ need to reach internal targets, relax it with an `[egress]` section — see
 ### CLI
 
 ```
-next-socks5 [OPTIONS]              Run the server (default)
+next-socks5                        Print help (a bare invocation never starts a server)
+next-socks5 serve [OPTIONS]        Run the server (alias: run)
 next-socks5 attach [OPTIONS]       Attach to a running server's dashboard
 
 Server options:
@@ -286,7 +287,7 @@ The terminal dashboard is on by default — just run the server without
 `--no-tui`:
 
 ```bash
-next-socks5 --listen 127.0.0.1:1080
+next-socks5 serve --listen 127.0.0.1:1080
 ```
 
 It shows live throughput (with a 30s trend chart), success/error stats, a
@@ -309,10 +310,10 @@ keys or taking screenshots. The fake activity stops as soon as you quit.
 
 ```bash
 # Local preview: open the dashboard and continuously generate mock data.
-cargo run --release -- --listen 127.0.0.1:1080 --mock
+cargo run --release -- serve --listen 127.0.0.1:1080 --mock
 
 # Or with an installed binary:
-next-socks5 --listen 127.0.0.1:1080 --mock
+next-socks5 serve --listen 127.0.0.1:1080 --mock
 ```
 
 `--mock` is a demo/testing aid only; never enable it on a real proxy.
@@ -358,7 +359,7 @@ default `/run` path is usually not writable. Start the server with a writable
 socket and attach to the same path:
 
 ```bash
-next-socks5 --no-tui --admin-socket /tmp/ns5.sock
+next-socks5 serve --no-tui --admin-socket /tmp/ns5.sock
 next-socks5 attach --socket /tmp/ns5.sock
 ```
 

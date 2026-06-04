@@ -441,10 +441,11 @@ dependencies = [
 
 [[package]]
 name = "next-socks5"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "clap",
  "crossterm",
+ "libc",
  "postcard",
  "ratatui",
  "serde",
