@@ -49,12 +49,39 @@ curl -fsSL https://raw.githubusercontent.com/zinger-labs/next-socks5/main/instal
   | sh -s -- --method docker --auth --port 1080
 ```
 
-Or clone and run locally:
+Or clone and run locally. Each example is annotated below; in auth mode with no
+`--user` / `--pass`, the installer generates a username and a 20-character
+password and prints them at the end, together with a ready-to-use `socks5://`
+URL and a `curl` test command.
 
 ```bash
+# Show every flag and exit
 ./install.sh --help
+
+# Simplest run: binary install, auth ON (auto-generated user/password), random free port
+./install.sh
+
+# Docker instead of a native binary (host networking, so UDP ASSOCIATE works)
+./install.sh --method docker
+
+# Open proxy (no auth) on a fixed port — only on a trusted network
 ./install.sh --method binary --no-auth --port 1080
+
+# Explicit credentials on a fixed port
 ./install.sh --method docker --auth --user alice --pass secret --port 1080
+
+# Bind to a single interface instead of 0.0.0.0 (here: localhost only)
+./install.sh --no-auth --listen 127.0.0.1 --port 1080
+
+# Pin a specific release instead of `latest`
+./install.sh --version v0.2.0 --port 1080
+
+# Install the binary + config only — do NOT create or start a service
+./install.sh --no-service --port 1080            # same as: NO_SERVICE=1 ./install.sh --port 1080
+
+# Custom location: binary install dir (binary) / compose deploy dir (docker)
+./install.sh --bin-dir /opt/bin --port 1080
+./install.sh --method docker --dir ./ns5 --port 1080
 ```
 
 | Flag | Description | Default |
@@ -65,6 +92,8 @@ Or clone and run locally:
 | `--port <port>` | Listen port (random free port if omitted) | random |
 | `--listen <addr>` | Bind address | `0.0.0.0` |
 | `--version <tag>` | Release version, e.g. `v0.1.0` | `latest` |
+| `--bin-dir <dir>` | Binary install directory (binary method) | `/usr/local/bin` |
+| `--dir <dir>` | Docker deploy directory (docker method) | `./next-socks5-deploy` |
 | `--no-service` | Install binary + config only; don't set up/start a service | off |
 
 > Binary install targets Linux (musl x86_64 / aarch64) and sets up a **systemd**

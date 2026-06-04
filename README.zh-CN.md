@@ -46,12 +46,38 @@ curl -fsSL https://raw.githubusercontent.com/zinger-labs/next-socks5/main/instal
   | sh -s -- --method docker --auth --port 1080
 ```
 
-或克隆到本地运行:
+或克隆到本地运行。下面每个示例都带注释;在认证模式下若不提供 `--user` / `--pass`,
+安装器会生成用户名和一个 20 位密码,并在结束时连同可直接使用的 `socks5://` URL 与
+一条 `curl` 测试命令一起打印出来。
 
 ```bash
+# 列出所有参数并退出
 ./install.sh --help
+
+# 最简运行:二进制安装,开启认证(自动生成用户名/密码),随机空闲端口
+./install.sh
+
+# 用 Docker 而非原生二进制(host 网络,UDP ASSOCIATE 可用)
+./install.sh --method docker
+
+# 开放代理(无认证)+ 固定端口 —— 仅限可信网络
 ./install.sh --method binary --no-auth --port 1080
+
+# 显式指定凭证 + 固定端口
 ./install.sh --method docker --auth --user alice --pass secret --port 1080
+
+# 绑定到单个网卡而非 0.0.0.0(此处:仅本机)
+./install.sh --no-auth --listen 127.0.0.1 --port 1080
+
+# 固定某个发布版本,而非 `latest`
+./install.sh --version v0.2.0 --port 1080
+
+# 只安装二进制 + 配置 —— 不创建/启动服务
+./install.sh --no-service --port 1080            # 等价于:NO_SERVICE=1 ./install.sh --port 1080
+
+# 自定义位置:二进制安装目录(binary)/ compose 部署目录(docker)
+./install.sh --bin-dir /opt/bin --port 1080
+./install.sh --method docker --dir ./ns5 --port 1080
 ```
 
 | 选项 | 说明 | 默认 |
@@ -62,6 +88,8 @@ curl -fsSL https://raw.githubusercontent.com/zinger-labs/next-socks5/main/instal
 | `--port <port>` | 监听端口(省略则随机选空闲端口) | 随机 |
 | `--listen <addr>` | 绑定地址 | `0.0.0.0` |
 | `--version <tag>` | 发布版本,如 `v0.1.0` | `latest` |
+| `--bin-dir <dir>` | 二进制安装目录(binary 方式) | `/usr/local/bin` |
+| `--dir <dir>` | Docker 部署目录(docker 方式) | `./next-socks5-deploy` |
 | `--no-service` | 仅安装二进制 + 配置,不创建/启动服务 | 关闭 |
 
 > 二进制安装面向 Linux(musl x86_64 / aarch64),并配置 **systemd** 或 **OpenRC**
