@@ -1,5 +1,7 @@
 # next-socks5
 
+**English** | [简体中文](README.zh-CN.md)
+
 [![build](https://github.com/zinger-labs/next-socks5/actions/workflows/build.yml/badge.svg)](https://github.com/zinger-labs/next-socks5/actions/workflows/build.yml)
 
 A lightweight, scalable **SOCKS5 server** written in Rust (RFC 1928 + RFC 1929),
