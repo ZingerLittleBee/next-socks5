@@ -2,11 +2,11 @@
 
 [English](README.md) | **简体中文**
 
-[![Build](https://img.shields.io/github/actions/workflow/status/zinger-labs/next-socks5/build.yml?style=for-the-badge)](https://github.com/zinger-labs/next-socks5/actions/workflows/build.yml)
-[![Release](https://img.shields.io/github/v/release/zinger-labs/next-socks5?style=for-the-badge)](https://github.com/zinger-labs/next-socks5/releases/latest)
-[![Downloads](https://img.shields.io/github/downloads/zinger-labs/next-socks5/total?style=for-the-badge)](https://github.com/zinger-labs/next-socks5/releases)
-[![Container](https://img.shields.io/badge/ghcr.io-next--socks5-2496ED?logo=docker&logoColor=white&style=for-the-badge)](https://github.com/zinger-labs/next-socks5/pkgs/container/next-socks5)
-[![License](https://img.shields.io/github/license/zinger-labs/next-socks5?style=for-the-badge)](LICENSE)
+[![Build](https://img.shields.io/github/actions/workflow/status/ZingerLittleBee/next-socks5/build.yml?style=for-the-badge)](https://github.com/ZingerLittleBee/next-socks5/actions/workflows/build.yml)
+[![Release](https://img.shields.io/github/v/release/ZingerLittleBee/next-socks5?style=for-the-badge)](https://github.com/ZingerLittleBee/next-socks5/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/ZingerLittleBee/next-socks5/total?style=for-the-badge)](https://github.com/ZingerLittleBee/next-socks5/releases)
+[![Container](https://img.shields.io/badge/ghcr.io-next--socks5-2496ED?logo=docker&logoColor=white&style=for-the-badge)](https://github.com/ZingerLittleBee/next-socks5/pkgs/container/next-socks5)
+[![License](https://img.shields.io/github/license/ZingerLittleBee/next-socks5?style=for-the-badge)](LICENSE)
 [![Built with Rust](https://img.shields.io/badge/built_with-Rust-000000?logo=rust&logoColor=white&style=for-the-badge)](https://www.rust-lang.org)
 
 一个用 Rust 编写的轻量、可扩展的 **SOCKS5 服务器**(RFC 1928 + RFC 1929),内置
@@ -46,10 +46,10 @@
 
 ```bash
 # 二进制安装,启用认证(自动生成用户名/密码),随机端口:
-curl -fsSL https://raw.githubusercontent.com/zinger-labs/next-socks5/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/ZingerLittleBee/next-socks5/main/install.sh | sh
 
 # 带参数(注意用 -s -- 把参数透传给 curl | sh):
-curl -fsSL https://raw.githubusercontent.com/zinger-labs/next-socks5/main/install.sh \
+curl -fsSL https://raw.githubusercontent.com/ZingerLittleBee/next-socks5/main/install.sh \
   | sh -s -- --port 1080
 ```
 
@@ -111,7 +111,7 @@ curl -fsSL https://raw.githubusercontent.com/zinger-labs/next-socks5/main/instal
 打印):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/zinger-labs/next-socks5/main/install.sh \
+curl -fsSL https://raw.githubusercontent.com/ZingerLittleBee/next-socks5/main/install.sh \
   | sh -s -- --method docker --auth --port 1080
 ```
 
@@ -121,7 +121,7 @@ curl -fsSL https://raw.githubusercontent.com/zinger-labs/next-socks5/main/instal
 ```bash
 # 无认证,host 网络(UDP ASSOCIATE 可用),监听 1080:
 docker run -d --name next-socks5 --network host \
-  ghcr.io/zinger-labs/next-socks5:latest --listen 0.0.0.0:1080
+  ghcr.io/zingerlittlebee/next-socks5:latest --listen 0.0.0.0:1080
 ```
 
 使用配置文件(用于认证):
@@ -129,7 +129,7 @@ docker run -d --name next-socks5 --network host \
 ```bash
 docker run -d --name next-socks5 --network host \
   -v "$PWD/config.toml:/etc/next-socks5/config.toml:ro" \
-  ghcr.io/zinger-labs/next-socks5:latest --config /etc/next-socks5/config.toml
+  ghcr.io/zingerlittlebee/next-socks5:latest --config /etc/next-socks5/config.toml
 ```
 
 或使用 Compose(`docker-compose.yml`):
@@ -137,7 +137,7 @@ docker run -d --name next-socks5 --network host \
 ```yaml
 services:
   next-socks5:
-    image: ghcr.io/zinger-labs/next-socks5:latest
+    image: ghcr.io/zingerlittlebee/next-socks5:latest
     container_name: next-socks5
     restart: unless-stopped
     network_mode: host
@@ -155,12 +155,12 @@ docker compose up -d
 
 ### 方式三 —— 预编译二进制
 
-从 [Releases](https://github.com/zinger-labs/next-socks5/releases) 页面下载静态
+从 [Releases](https://github.com/ZingerLittleBee/next-socks5/releases) 页面下载静态
 musl 构建:
 
 ```bash
 curl -fL -o next-socks5.tar.gz \
-  https://github.com/zinger-labs/next-socks5/releases/latest/download/next-socks5-x86_64-unknown-linux-musl.tar.gz
+  https://github.com/ZingerLittleBee/next-socks5/releases/latest/download/next-socks5-x86_64-unknown-linux-musl.tar.gz
 tar xzf next-socks5.tar.gz
 ./next-socks5-x86_64-unknown-linux-musl/next-socks5 serve --no-tui --listen 0.0.0.0:1080
 ```
@@ -172,7 +172,7 @@ tar xzf next-socks5.tar.gz
 需要较新的 stable Rust 工具链。
 
 ```bash
-git clone https://github.com/zinger-labs/next-socks5
+git clone https://github.com/ZingerLittleBee/next-socks5
 cd next-socks5
 cargo build --release
 ./target/release/next-socks5 serve            # TUI 仪表盘
@@ -185,7 +185,7 @@ cargo build --release --no-default-features
 或直接从 git 安装:
 
 ```bash
-cargo install --git https://github.com/zinger-labs/next-socks5
+cargo install --git https://github.com/ZingerLittleBee/next-socks5
 ```
 
 ## 配置

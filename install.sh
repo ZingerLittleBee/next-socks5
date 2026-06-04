@@ -14,8 +14,8 @@
 set -eu
 
 # --- Constants ----------------------------------------------------------------
-REPO="zinger-labs/next-socks5"
-IMAGE="ghcr.io/zinger-labs/next-socks5"
+REPO="ZingerLittleBee/next-socks5"
+IMAGE="ghcr.io/zingerlittlebee/next-socks5"
 BIN_NAME="next-socks5"
 
 # --- Defaults -----------------------------------------------------------------
