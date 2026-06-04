@@ -2,7 +2,12 @@
 
 **English** | [简体中文](README.zh-CN.md)
 
-[![build](https://github.com/zinger-labs/next-socks5/actions/workflows/build.yml/badge.svg)](https://github.com/zinger-labs/next-socks5/actions/workflows/build.yml)
+[![Build](https://img.shields.io/github/actions/workflow/status/zinger-labs/next-socks5/build.yml?style=for-the-badge)](https://github.com/zinger-labs/next-socks5/actions/workflows/build.yml)
+[![Release](https://img.shields.io/github/v/release/zinger-labs/next-socks5?style=for-the-badge)](https://github.com/zinger-labs/next-socks5/releases/latest)
+[![Downloads](https://img.shields.io/github/downloads/zinger-labs/next-socks5/total?style=for-the-badge)](https://github.com/zinger-labs/next-socks5/releases)
+[![Container](https://img.shields.io/badge/ghcr.io-next--socks5-2496ED?logo=docker&logoColor=white&style=for-the-badge)](https://github.com/zinger-labs/next-socks5/pkgs/container/next-socks5)
+[![License](https://img.shields.io/github/license/zinger-labs/next-socks5?style=for-the-badge)](LICENSE)
+[![Built with Rust](https://img.shields.io/badge/built_with-Rust-000000?logo=rust&logoColor=white&style=for-the-badge)](https://www.rust-lang.org)
 
 A lightweight, scalable **SOCKS5 server** written in Rust (RFC 1928 + RFC 1929),
 with a live terminal dashboard and a headless mode for containers. The protocol
