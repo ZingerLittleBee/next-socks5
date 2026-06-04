@@ -7,7 +7,7 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 use tokio::net::TcpListener;
 use tokio::sync::broadcast::error::RecvError;
 use tokio::sync::{broadcast, watch};
@@ -43,6 +43,25 @@ async fn main() {
     if matches!(cli.command, Some(Command::Attach { .. })) {
         eprintln!("attach 需要启用 tui feature 的构建");
         std::process::exit(1);
+    }
+
+    // A bare `next-socks5` with no arguments prints usage instead of silently
+    // starting a server: on a host already running the service it would launch a
+    // second instance that fights over the shared admin socket. `serve` (alias
+    // `run`) is the explicit way to start the server.
+    if cli.command.is_none() && std::env::args_os().len() <= 1 {
+        let mut cmd = Cli::command();
+        let _ = cmd.print_long_help();
+        println!();
+        return;
+    }
+    // Backward compatibility: pre-0.4 deployments start the server without the
+    // `serve` subcommand (e.g. `next-socks5 --no-tui --config ...`). Keep that
+    // working but nudge operators toward the explicit subcommand.
+    if cli.command.is_none() {
+        eprintln!(
+            "note: starting the server without the `serve` subcommand is deprecated; use `next-socks5 serve`"
+        );
     }
 
     let cfg = match Config::load(&cli) {

@@ -5,6 +5,37 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.1] - 2026-06-04
+
+A bare `next-socks5` run on a host already running the service used to start a
+second server that hijacked — and then deleted — the live service's admin
+socket, leaving it with no reachable `attach` endpoint. This release fixes that
+and makes starting the server explicit. Covered by regression tests and
+validated on a live Linux deployment.
+
+### Fixed
+
+- Admin-socket hijack: a second `next-socks5` process no longer unlinks and
+  rebinds an admin Unix socket that a live instance is already serving (which
+  silently destroyed the running server's `attach` socket). The admin endpoint
+  now probes the path with `connect()` and refuses to clobber a live socket,
+  holds a lifetime advisory lock on a sidecar `<socket>.lock` to serialize
+  racing starters, and still reclaims a stale socket left by a crashed instance.
+
+### Changed
+
+- A bare `next-socks5` (no arguments) now prints help instead of starting a
+  server; run the server explicitly with the new `serve` subcommand. Legacy
+  flag-only invocations (e.g. `next-socks5 --no-tui --config …`) still start the
+  server with a one-time deprecation notice, so existing systemd / OpenRC /
+  Docker deployments keep working unchanged.
+- `install.sh` (systemd & OpenRC units, manual-start hints) and the Docker image
+  entrypoint now launch the server via `serve`.
+
+### Added
+
+- `serve` subcommand (alias `run`) to run the SOCKS5 server.
+
 ## [0.3.0] - 2026-06-04
 
 Security & robustness hardening from a full SOCKS5 audit. Every fix is covered

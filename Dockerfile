@@ -17,7 +17,8 @@ EXPOSE 1080/tcp 1080/udp
 # Run as an unprivileged user (scratch has no /etc/passwd; a numeric UID works).
 USER 65534:65534
 
-# The container has no TTY, so always run headless. The CMD holds the default
-# listen address and can be overridden at `docker run` time; --no-tui stays.
-ENTRYPOINT ["/usr/local/bin/next-socks5", "--no-tui"]
+# The container has no TTY, so always run headless. The entrypoint pins the
+# `serve` subcommand and `--no-tui`; the CMD holds the default listen address and
+# can be overridden at `docker run` time (those args append after `serve`).
+ENTRYPOINT ["/usr/local/bin/next-socks5", "serve", "--no-tui"]
 CMD ["--listen", "0.0.0.0:1080"]

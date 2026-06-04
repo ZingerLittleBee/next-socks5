@@ -243,32 +243,36 @@ impl Egress {
 #[derive(Debug, clap::Parser)]
 #[command(name = "next-socks5", about = "A lightweight SOCKS5 server")]
 pub struct Cli {
-    /// Subcommand. With no subcommand, the server runs (default).
+    /// Subcommand. `serve` runs the server; with no subcommand, usage is shown.
     #[command(subcommand)]
     pub command: Option<Command>,
     /// Path to a TOML configuration file.
-    #[arg(long)]
+    #[arg(long, global = true)]
     pub config: Option<PathBuf>,
     /// Override the listen address from the config file.
-    #[arg(long)]
+    #[arg(long, global = true)]
     pub listen: Option<String>,
     /// Disable the terminal UI.
-    #[arg(long)]
+    #[arg(long, global = true)]
     pub no_tui: bool,
     /// Disable the local admin/attach endpoint.
-    #[arg(long)]
+    #[arg(long, global = true)]
     pub no_admin: bool,
     /// Override the admin socket path.
-    #[arg(long)]
+    #[arg(long, global = true)]
     pub admin_socket: Option<PathBuf>,
     /// Feed the dashboard with synthetic data (demo only; no real traffic).
-    #[arg(long, hide = true)]
+    #[arg(long, hide = true, global = true)]
     pub mock: bool,
 }
 
-/// Subcommands. With no subcommand, the server runs (default).
+/// Subcommands. With no subcommand, a bare invocation prints usage; `serve`
+/// (alias `run`) starts the server.
 #[derive(Debug, clap::Subcommand)]
 pub enum Command {
+    /// Run the SOCKS5 server.
+    #[command(visible_alias = "run")]
+    Serve,
     /// Attach to a running server and show its dashboard.
     Attach {
         /// Path to the admin socket to connect to.
