@@ -151,13 +151,34 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
+
       - name: Download build artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
 
+      # Pull the section for this tag's version out of CHANGELOG.md and use it as
+      # the release body. The tag looks like v0.3.0; the matching heading is
+      # `## [0.3.0]`. Falls back to a generic line if no section is found.
+      - name: Extract release notes from CHANGELOG
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          awk -v ver="$version" '
+            BEGIN { gsub(/\./, "\\.", ver); hdr = "^## \\[" ver "\\]" }
+            /^## / { if (inblk) exit; inblk = ($0 ~ hdr); next }
+            inblk { print }
+          ' CHANGELOG.md | sed '/./,$!d' > RELEASE_NOTES.md
+          if [ ! -s RELEASE_NOTES.md ]; then
+            echo "Release ${version}." > RELEASE_NOTES.md
+          fi
+          echo "----- release notes for ${version} -----"
+          cat RELEASE_NOTES.md
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: artifacts/**/*.tar.gz
-          generate_release_notes: true
+          body_path: RELEASE_NOTES.md
