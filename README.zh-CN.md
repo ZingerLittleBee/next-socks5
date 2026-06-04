@@ -43,7 +43,7 @@ curl -fsSL https://raw.githubusercontent.com/zinger-labs/next-socks5/main/instal
 
 # 带参数(注意用 -s -- 把参数透传给 curl | sh):
 curl -fsSL https://raw.githubusercontent.com/zinger-labs/next-socks5/main/install.sh \
-  | sh -s -- --no-auth --port 1080
+  | sh -s -- --port 1080
 ```
 
 或克隆到本地运行。下面每个示例都带注释;在认证模式下若不提供 `--user` / `--pass`,

@@ -46,7 +46,7 @@ curl -fsSL https://raw.githubusercontent.com/zinger-labs/next-socks5/main/instal
 
 # With options (note the `-s --` to pass args through curl | sh):
 curl -fsSL https://raw.githubusercontent.com/zinger-labs/next-socks5/main/install.sh \
-  | sh -s -- --no-auth --port 1080
+  | sh -s -- --port 1080
 ```
 
 Or clone and run locally. Each example is annotated below; in auth mode with no
