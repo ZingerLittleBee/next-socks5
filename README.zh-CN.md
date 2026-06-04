@@ -35,7 +35,7 @@
 - **健壮性** —— 连接 / TCP 空闲 / UDP 空闲 超时、可选的 `max_connections` 限制、
   支持半开连接的中继,以及优雅关闭。
 - **配置** —— TOML 配置文件,支持 CLI 覆盖。
-- **小巧、可移植** —— 纯 Rust,无 C 依赖;以完全静态的 musl 二进制和约 2 MB 的
+- **小巧、可移植** —— 纯 Rust,无 C 依赖;以完全静态的 musl 二进制和约 3.5 MB 的
   `scratch` 镜像发布。
 
 ## 安装
@@ -143,6 +143,10 @@ services:
     network_mode: host
     volumes:
       - ./config.toml:/etc/next-socks5/config.toml:ro
+    # admin/attach socket 的可写运行时目录 —— 镜像以非特权用户运行,自己无法创建
+    # /run/next-socks5。缺少这一段时,`docker exec ... next-socks5 attach` 无法连接。
+    tmpfs:
+      - /run/next-socks5
     command: ["--config", "/etc/next-socks5/config.toml"]
 ```
 
@@ -344,6 +348,11 @@ next-socks5 attach --socket /tmp/ns5.sock
 > 默认 socket 位于 `/run/next-socks5`(权限 `0710`,属主为服务用户)。`root` 始终
 > 可以 attach;非 root 用户只能 attach 自己拥有的 socket(例如 `/tmp` 或
 > `$XDG_RUNTIME_DIR` 下的手动安装)。
+>
+> **Docker:** 容器以非特权用户(uid `65534`)运行,需要一个可写的 `/run/next-socks5`
+> 来放 admin socket。安装器生成的 Compose(以及上面的示例)通过 `tmpfs` 提供;裸
+> `docker run` 需加 `--tmpfs /run/next-socks5`。否则服务会记录
+> `admin endpoint disabled: Permission denied`,attach 无法连接。
 
 用 `--no-admin` 或 `[admin] enabled = false` 禁用该端点。
 

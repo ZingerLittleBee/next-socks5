@@ -38,7 +38,7 @@ is hand-written; the dependency footprint is kept deliberately small.
   `max_connections` limit, half-open-aware relay, and graceful shutdown.
 - **Configuration** — TOML file with CLI overrides.
 - **Small & portable** — pure Rust, no C dependencies; ships as fully static
-  musl binaries and a ~2 MB `scratch`-based container image.
+  musl binaries and a ~3.5 MB `scratch`-based container image.
 
 ## Installation
 
@@ -148,6 +148,11 @@ services:
     network_mode: host
     volumes:
       - ./config.toml:/etc/next-socks5/config.toml:ro
+    # Writable runtime dir for the admin/attach socket — the image runs as an
+    # unprivileged user that can't create /run/next-socks5 on its own. Without
+    # this, `docker exec ... next-socks5 attach` cannot connect.
+    tmpfs:
+      - /run/next-socks5
     command: ["--config", "/etc/next-socks5/config.toml"]
 ```
 
@@ -358,6 +363,12 @@ server stops, the dashboard exits with `connection lost`.
 > The default socket lives under `/run/next-socks5` (mode `0710`, owned by the
 > service user). `root` can always attach; a non-root user can only attach to a
 > socket it owns (e.g. a manual install under `/tmp` or `$XDG_RUNTIME_DIR`).
+>
+> **Docker:** the container runs as an unprivileged user (uid `65534`) and needs a
+> writable `/run/next-socks5` for the admin socket. The installer's generated
+> Compose (and the example above) provide it via `tmpfs`; a bare `docker run`
+> needs `--tmpfs /run/next-socks5`. Without it the server logs
+> `admin endpoint disabled: Permission denied` and `attach` cannot connect.
 
 Disable the endpoint with `--no-admin` or `[admin] enabled = false`.
 
