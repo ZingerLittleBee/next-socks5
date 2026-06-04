@@ -1,13 +1,15 @@
 //! CONNECT command: target resolution, dial with timeout, success reply, and
 //! a counted bidirectional relay.
 
+use std::io;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::broadcast;
+use tokio::time::Instant;
 
 use crate::config::Config;
 use crate::error::Socks5Error;
@@ -25,11 +27,13 @@ pub async fn run(
     peer: SocketAddr,
 ) {
     let target_str = address_to_string(&target);
+    let connect_timeout = Duration::from_millis(cfg.timeouts.connect_ms);
 
-    // 1. Resolve the target to a concrete SocketAddr.
-    let addr = match resolve(&target).await {
-        Some(addr) => addr,
-        None => {
+    // 1. Resolve the target to a concrete SocketAddr, bounding DNS by the
+    //    connect timeout so a slow/blackholed resolver cannot stall the task.
+    let addr = match tokio::time::timeout(connect_timeout, resolve(&target)).await {
+        Ok(Some(addr)) => addr,
+        Ok(None) | Err(_) => {
             reply_failure(&mut client, Socks5Error::HostUnreachable).await;
             metrics.record_error(Socks5Error::HostUnreachable.reply_code());
             let _ = events.send(Event::Error {
@@ -40,8 +44,20 @@ pub async fn run(
         }
     };
 
-    // 2. Dial the upstream with a connect timeout.
-    let connect_timeout = Duration::from_millis(cfg.timeouts.connect_ms);
+    // 2. Egress policy: refuse internal/metadata destinations (SSRF guard). The
+    //    check runs after resolution so domains pointing at internal IPs are
+    //    blocked too.
+    if cfg.egress.is_blocked(addr.ip()) {
+        reply_failure(&mut client, Socks5Error::NotAllowed).await;
+        metrics.record_error(Socks5Error::NotAllowed.reply_code());
+        let _ = events.send(Event::Error {
+            code: Socks5Error::NotAllowed.reply_code(),
+            msg: format!("destination not allowed: {target_str}"),
+        });
+        return;
+    }
+
+    // 3. Dial the upstream with a connect timeout.
     let upstream = match tokio::time::timeout(connect_timeout, TcpStream::connect(addr)).await {
         Ok(Ok(stream)) => stream,
         Ok(Err(e)) => {
@@ -68,7 +84,7 @@ pub async fn run(
 
     let mut upstream = upstream;
 
-    // 3. Reply success with the upstream's local address as BND.
+    // 4. Reply success with the upstream's local address as BND.
     let bind = upstream
         .local_addr()
         .map(socket_addr_to_address)
@@ -88,7 +104,7 @@ pub async fn run(
         kind: ConnKind::Connect,
     });
 
-    // 4. Relay until either side closes or the idle timeout fires.
+    // 5. Relay until either side closes or the idle timeout fires.
     let idle = Duration::from_millis(cfg.timeouts.tcp_idle_ms);
     let _ = copy_bidirectional_counted(&mut client, &mut upstream, idle, &metrics, id).await;
 
@@ -134,8 +150,8 @@ async fn reply_failure(client: &mut TcpStream, err: Socks5Error) {
     let _ = client.write_all(&out).await;
 }
 
-/// Relay bytes in both directions until BOTH sides close (or an idle timeout /
-/// error winds a direction down).
+/// Relay bytes in both directions until BOTH sides close (or the relay winds
+/// down on a coupled idle timeout / write timeout / error).
 ///
 /// Each `TcpStream` is split into independent read/write halves so the two
 /// directions run concurrently via [`tokio::join!`]. This supports half-open
@@ -143,6 +159,12 @@ async fn reply_failure(client: &mut TcpStream, err: Socks5Error) {
 /// the writer it feeds is shut down (propagating the FIN) — the other direction
 /// keeps relaying until it too reaches EOF. `client -> upstream` bytes count as
 /// upload, the reverse as download.
+///
+/// The two directions share a single "last activity" instant so an idle
+/// direction does not half-close while the other is actively transferring;
+/// teardown on idleness only happens when NEITHER direction has moved bytes for
+/// the idle window. Writes are bounded by the same window so a stuck reader
+/// (full receive window) cannot pin a direction forever.
 async fn copy_bidirectional_counted(
     client: &mut TcpStream,
     upstream: &mut TcpStream,
@@ -153,6 +175,9 @@ async fn copy_bidirectional_counted(
     let (mut client_rd, mut client_wr) = tokio::io::split(client);
     let (mut upstream_rd, mut upstream_wr) = tokio::io::split(upstream);
 
+    // Shared across both directions; updated on every successful relayed write.
+    let last_activity = Mutex::new(Instant::now());
+
     // client -> upstream (upload)
     let up = copy_half(
         &mut client_rd,
@@ -161,6 +186,7 @@ async fn copy_bidirectional_counted(
         Direction::Up,
         metrics,
         id,
+        &last_activity,
     );
     // upstream -> client (download)
     let down = copy_half(
@@ -170,10 +196,12 @@ async fn copy_bidirectional_counted(
         Direction::Down,
         metrics,
         id,
+        &last_activity,
     );
 
     // Drive both directions to completion. Either may end first (on its source
-    // EOF, idle timeout, or error); the relay returns only once both are done.
+    // EOF, coupled idle timeout, write timeout, or error); the relay returns
+    // only once both are done.
     let (up_res, down_res) = tokio::join!(up, down);
     up_res.and(down_res)
 }
@@ -185,10 +213,12 @@ enum Direction {
     Down,
 }
 
-/// Copy one direction: read from `src` with an idle timeout and write to `dst`,
-/// counting bytes per `dir`. On source EOF, `dst` is shut down (half-close) so
-/// the peer observes the FIN. On idle timeout the direction simply finishes,
-/// letting the other direction wind down too.
+/// Copy one direction: read from `src` with an idle timeout and write to `dst`
+/// with a write timeout, counting bytes per `dir`. On source EOF, `dst` is shut
+/// down (half-close) so the peer observes the FIN. On idle timeout the direction
+/// only winds down when the OTHER direction (via `last_activity`) has also been
+/// idle for the window, so an active transfer is never truncated.
+#[allow(clippy::too_many_arguments)]
 async fn copy_half<R, W>(
     src: &mut R,
     dst: &mut W,
@@ -196,6 +226,7 @@ async fn copy_half<R, W>(
     dir: Direction,
     metrics: &Metrics,
     id: u64,
+    last_activity: &Mutex<Instant>,
 ) -> std::io::Result<()>
 where
     R: AsyncReadExt + Unpin,
@@ -204,14 +235,26 @@ where
     let mut buf = [0u8; 16 * 1024];
     loop {
         match read_with_idle(src, &mut buf, idle).await? {
-            // EOF: stop reading this direction and half-close the writer so the
-            // destination sees the close, then finish this direction only.
-            Some(0) | None => {
+            // Genuine EOF: half-close the writer so the destination sees the
+            // close, then finish this direction only.
+            Some(0) => {
                 let _ = dst.shutdown().await;
                 return Ok(());
             }
+            // Idle window elapsed for this direction's read. Only tear down if
+            // the other direction has ALSO been idle that long; otherwise it is
+            // actively transferring and half-closing here would truncate it.
+            None => {
+                let stale = last_activity.lock().unwrap().elapsed() >= idle;
+                if stale {
+                    let _ = dst.shutdown().await;
+                    return Ok(());
+                }
+                continue;
+            }
             Some(n) => {
-                dst.write_all(&buf[..n]).await?;
+                write_all_with_timeout(dst, &buf[..n], idle).await?;
+                *last_activity.lock().unwrap() = Instant::now();
                 match dir {
                     Direction::Up => metrics.add_up(id, n as u64),
                     Direction::Down => metrics.add_down(id, n as u64),
@@ -235,5 +278,22 @@ where
         Ok(Ok(n)) => Ok(Some(n)),
         Ok(Err(e)) => Err(e),
         Err(_) => Ok(None),
+    }
+}
+
+/// Write all of `data` to `dst`, bounded by `timeout`. A peer that stops
+/// draining its socket (full receive window) would otherwise block this write —
+/// and thus the whole relay — forever; the timeout turns that into an error so
+/// the relay tears down.
+async fn write_all_with_timeout<W>(dst: &mut W, data: &[u8], timeout: Duration) -> io::Result<()>
+where
+    W: AsyncWriteExt + Unpin,
+{
+    match tokio::time::timeout(timeout, dst.write_all(data)).await {
+        Ok(res) => res,
+        Err(_) => Err(io::Error::new(
+            io::ErrorKind::TimedOut,
+            "relay write timed out (peer not draining)",
+        )),
     }
 }
