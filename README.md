@@ -289,7 +289,8 @@ advertise  = "203.0.113.42"  # advertised BND IP (a client-reachable address)
   IP is not client-reachable (behind NAT, or Docker bridge networking). The
   advertised **port is always the real bound port**, so any NAT/forward must be
   **port-preserving (1:1)**. An unreachable advertised address is the #1 cause of
-  "TCP works but UDP doesn't".
+  "TCP works but UDP doesn't". Accepts a bare IP or `ip:port` (port ignored); a
+  malformed value is rejected at startup rather than silently ignored.
 
 **Docker.** The provided compose uses `network_mode: host` (Linux), which needs no
 port mapping. For bridge networking, publish the TCP control port and the UDP

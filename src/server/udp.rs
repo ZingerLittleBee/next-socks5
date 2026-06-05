@@ -301,22 +301,15 @@ async fn reply_general_failure(control: &mut TcpStream) {
 
 /// Advertised BND IP for UDP ASSOCIATE replies: the configured `[udp].advertise`
 /// IP when set and usable, else `None` (the caller falls back to the bound IP).
-/// An unspecified address (`0.0.0.0` / `::`) is rejected — never advertised.
+/// The value is validated to a real IP at config load; an unspecified address
+/// (`0.0.0.0` / `::`) is rejected here — never advertised.
 fn resolve_advertise_ip(cfg: &Config) -> Option<IpAddr> {
-    let ip = parse_ip(cfg.udp.advertise.as_deref()?)?;
+    let ip = cfg.udp.advertise?;
     if ip.is_unspecified() {
         None
     } else {
         Some(ip)
     }
-}
-
-/// Parse an IP from a `udp.advertise` value that may be a bare IP or `ip:port`.
-fn parse_ip(s: &str) -> Option<IpAddr> {
-    if let Ok(ip) = s.parse::<IpAddr>() {
-        return Some(ip);
-    }
-    s.parse::<SocketAddr>().ok().map(|sa| sa.ip())
 }
 
 /// Build a SOCKS5 [`Address`] from a [`SocketAddr`].

@@ -22,9 +22,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   top-level `public_addr` option is renamed to `[udp].advertise` and is now
   advertise-only (it no longer affects which IP the socket binds), so a server
   behind NAT/Docker can advertise a client-reachable public IP while binding a
-  local one. The advertised port is always the real bound port. No
-  backward-compatible alias is kept: a top-level `public_addr` key in an existing
-  config is silently ignored, so migrate it to `[udp].advertise` before upgrading.
+  local one. The advertised port is always the real bound port. `[udp].advertise`
+  accepts a bare IP or an `ip:port` (the port is ignored) and is validated at
+  config load — a malformed value now makes the server refuse to start instead of
+  being silently ignored at runtime. No backward-compatible alias is kept: a
+  top-level `public_addr` key in an existing config is silently ignored, so
+  migrate it to `[udp].advertise` before upgrading.
 
 ## [0.3.2] - 2026-06-05
 

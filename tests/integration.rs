@@ -218,7 +218,7 @@ async fn udp_advertised_addr_uses_udp_advertise() {
         // control connection's local IP), and the reply must carry the
         // advertised IP — proving advertise is decoupled from bind.
         let mut cfg = no_auth_config();
-        cfg.udp.advertise = Some("203.0.113.9".to_string());
+        cfg.udp.advertise = Some("203.0.113.9".parse().unwrap());
         let proxy_addr = start_server_with_config(cfg).await;
 
         let mut control = TcpStream::connect(proxy_addr).await.unwrap();

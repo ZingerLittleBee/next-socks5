@@ -175,9 +175,37 @@ pub struct UdpConfig {
     pub port_range: Option<PortRange>,
     /// Advertised BND.ADDR IP for UDP ASSOCIATE replies (advertise-only; the
     /// advertised port is always the real bound port). `None` => advertise the
-    /// bound address. Needed behind NAT/Docker.
-    #[serde(default)]
-    pub advertise: Option<String>,
+    /// bound address. Needed behind NAT/Docker. Accepts a bare IP or an
+    /// `ip:port` (the port is ignored); a malformed value is rejected at config
+    /// load so a typo fails fast instead of being silently ignored at runtime.
+    #[serde(default, deserialize_with = "de_advertise_ip")]
+    pub advertise: Option<std::net::IpAddr>,
+}
+
+/// Deserialize `[udp].advertise`: accept a bare IP or an `ip:port` (the port is
+/// ignored — only the IP is advertised), rejecting anything else at config load.
+fn de_advertise_ip<'de, D>(deserializer: D) -> Result<Option<std::net::IpAddr>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s = <String as serde::Deserialize>::deserialize(deserializer)?;
+    parse_advertise_ip(&s)
+        .map(Some)
+        .map_err(serde::de::Error::custom)
+}
+
+/// Parse a `[udp].advertise` value into an IP. Accepts a bare IP, or an
+/// `ip:port` whose port is discarded; returns an error message otherwise.
+fn parse_advertise_ip(s: &str) -> Result<std::net::IpAddr, String> {
+    if let Ok(ip) = s.parse::<std::net::IpAddr>() {
+        return Ok(ip);
+    }
+    if let Ok(sa) = s.parse::<std::net::SocketAddr>() {
+        return Ok(sa.ip());
+    }
+    Err(format!(
+        "invalid advertise address {s:?}: expected an IP (e.g. \"203.0.113.42\") or \"ip:port\""
+    ))
 }
 
 /// Resource limits.
@@ -612,12 +640,28 @@ max_connections = 1024
             cfg.udp.port_range,
             Some(PortRange { start: 40000, end: 40100 })
         );
-        assert_eq!(cfg.udp.advertise.as_deref(), Some("203.0.113.42"));
+        assert_eq!(cfg.udp.advertise, Some("203.0.113.42".parse().unwrap()));
     }
 
     #[test]
     fn udp_section_defaults_empty() {
         let cfg = Config::from_toml_str("listen = \"x\"").expect("should parse");
         assert_eq!(cfg.udp, UdpConfig::default());
+    }
+
+    #[test]
+    fn advertise_rejects_malformed() {
+        // A typo'd advertise address must fail at config load, not be silently
+        // ignored at runtime.
+        let res = Config::from_toml_str("listen = \"x\"\n[udp]\nadvertise = \"not-an-ip\"");
+        assert!(res.is_err(), "malformed advertise must be rejected at load");
+    }
+
+    #[test]
+    fn advertise_accepts_ip_port() {
+        // An `ip:port` form is accepted; only the IP is kept (port ignored).
+        let cfg = Config::from_toml_str("listen = \"x\"\n[udp]\nadvertise = \"203.0.113.42:1080\"")
+            .expect("ip:port advertise should parse");
+        assert_eq!(cfg.udp.advertise, Some("203.0.113.42".parse().unwrap()));
     }
 }
