@@ -120,6 +120,52 @@ impl Default for Timeouts {
     }
 }
 
+/// An inclusive UDP relay port range `[start, end]` for binding association
+/// sockets. `start == end` is a single fixed port. Deserialized from a
+/// `"start-end"` string (e.g. `"40000-40100"`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PortRange {
+    /// First port in the range (inclusive); must be >= 1.
+    pub start: u16,
+    /// Last port in the range (inclusive); must be >= `start`.
+    pub end: u16,
+}
+
+impl PortRange {
+    /// Parse an inclusive `"start-end"` range. Rejects a missing dash,
+    /// non-numeric bounds, port 0 as `start`, and `start > end`.
+    fn parse(s: &str) -> Result<PortRange, String> {
+        let (start, end) = s
+            .split_once('-')
+            .ok_or_else(|| format!("expected 'start-end', got {s:?}"))?;
+        let start: u16 = start
+            .trim()
+            .parse()
+            .map_err(|_| format!("invalid start port {start:?}"))?;
+        let end: u16 = end
+            .trim()
+            .parse()
+            .map_err(|_| format!("invalid end port {end:?}"))?;
+        if start == 0 {
+            return Err("start port must be >= 1".to_string());
+        }
+        if start > end {
+            return Err(format!("start {start} must be <= end {end}"));
+        }
+        Ok(PortRange { start, end })
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for PortRange {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        PortRange::parse(&s).map_err(serde::de::Error::custom)
+    }
+}
+
 /// Resource limits.
 #[derive(Debug, Clone, Copy, serde::Deserialize, PartialEq, Eq)]
 pub struct Limits {
@@ -516,5 +562,29 @@ max_connections = 1024
         assert!(!e.is_blocked("10.0.0.1".parse::<IpAddr>().unwrap()));
         // The unspecified address is blocked regardless of policy.
         assert!(e.is_blocked("0.0.0.0".parse::<IpAddr>().unwrap()));
+    }
+
+    #[test]
+    fn port_range_parses_valid() {
+        assert_eq!(
+            PortRange::parse("40000-40100"),
+            Ok(PortRange { start: 40000, end: 40100 })
+        );
+    }
+
+    #[test]
+    fn port_range_allows_single_port() {
+        assert_eq!(
+            PortRange::parse("40000-40000"),
+            Ok(PortRange { start: 40000, end: 40000 })
+        );
+    }
+
+    #[test]
+    fn port_range_rejects_malformed() {
+        assert!(PortRange::parse("5000").is_err()); // no dash
+        assert!(PortRange::parse("a-b").is_err()); // non-numeric
+        assert!(PortRange::parse("5000-4000").is_err()); // start > end
+        assert!(PortRange::parse("0-100").is_err()); // start port 0
     }
 }
