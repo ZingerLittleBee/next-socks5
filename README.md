@@ -282,6 +282,9 @@ port_range = "40000-40100"   # bind UDP relay sockets to this inclusive range
 advertise  = "203.0.113.42"  # advertised BND IP (a client-reachable address)
 ```
 
+> `install.sh --udp-port-range 40000-40100 --udp-advertise 203.0.113.42` writes
+> exactly this `[udp]` block for you.
+
 - **`port_range`** — bind each association's UDP socket inside a known range
   instead of a random ephemeral port, so a firewall/NAT only needs that range
   opened. Each association binds its own socket, so size the range **≥ your
