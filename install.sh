@@ -475,7 +475,7 @@ else
 fi
 [ -n "$MANAGE_HINT" ] && field "manage" "$MANAGE_HINT"
 if [ "$METHOD" = "docker" ]; then
-  field "实时仪表板" "docker exec -it next-socks5 ${BIN_NAME} attach"
+  field "live dashboard" "docker exec -it next-socks5 ${BIN_NAME} attach"
 else
-  field "实时仪表板" "${BIN_DIR}/${BIN_NAME} attach"
+  field "live dashboard" "${BIN_DIR}/${BIN_NAME} attach"
 fi
