@@ -41,11 +41,11 @@ pub async fn run(
     events: broadcast::Sender<Event>,
     mut shutdown: watch::Receiver<bool>,
 ) {
-    // 1. Determine the IP the client can reach us on, and bind a UDP socket on
-    //    an ephemeral port of that IP. Never advertise an unspecified address.
-    let bind_ip = match resolve_bind_ip(&cfg, &control) {
-        Some(ip) => ip,
-        None => return,
+    // 1. Bind a per-association UDP relay socket on the control connection's
+    //    local IP — a local interface the TCP handshake already succeeded on.
+    let bind_ip = match control.local_addr() {
+        Ok(addr) => addr.ip(),
+        Err(_) => return,
     };
 
     let udp_sock = match UdpSocket::bind((bind_ip, 0)).await {
@@ -57,8 +57,11 @@ pub async fn run(
         Err(_) => return,
     };
 
-    // 2. Reply success with the bound UDP address as BND.ADDR/PORT.
-    let bnd_address = addr_from_socket(bnd_local);
+    // 2. Advertise BND.ADDR/PORT: the configured advertise IP (for NAT/Docker)
+    //    when set, else the bound IP. The advertised PORT is always the real
+    //    bound port — where the client must send its datagrams.
+    let advertise_ip = resolve_advertise_ip(&cfg).unwrap_or_else(|| bnd_local.ip());
+    let bnd_address = addr_from_socket(SocketAddr::new(advertise_ip, bnd_local.port()));
     let mut out = Vec::with_capacity(22);
     encode_reply(REP_SUCCEEDED, &bnd_address, &mut out);
     if control.write_all(&out).await.is_err() {
@@ -237,18 +240,13 @@ pub async fn run(
     let _ = events.send(Event::Closed { id });
 }
 
-/// Determine the client-reachable IP to bind the relay UDP socket on.
-///
-/// Prefers `cfg.udp.advertise` (parsed as an IP) when set, otherwise the control
-/// connection's local IP. An unspecified address (`0.0.0.0` / `::`) is never
-/// advertised, so it falls back to loopback.
-fn resolve_bind_ip(cfg: &Config, control: &TcpStream) -> Option<IpAddr> {
-    let ip = match &cfg.udp.advertise {
-        Some(s) => parse_ip(s)?,
-        None => control.local_addr().ok()?.ip(),
-    };
+/// Advertised BND IP for UDP ASSOCIATE replies: the configured `[udp].advertise`
+/// IP when set and usable, else `None` (the caller falls back to the bound IP).
+/// An unspecified address (`0.0.0.0` / `::`) is rejected — never advertised.
+fn resolve_advertise_ip(cfg: &Config) -> Option<IpAddr> {
+    let ip = parse_ip(cfg.udp.advertise.as_deref()?)?;
     if ip.is_unspecified() {
-        Some(IpAddr::V4(Ipv4Addr::LOCALHOST))
+        None
     } else {
         Some(ip)
     }

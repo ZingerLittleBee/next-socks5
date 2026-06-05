@@ -211,6 +211,45 @@ async fn udp_associate_echo() {
         .expect("udp associate scenario timed out");
 }
 
+#[tokio::test]
+async fn udp_advertised_addr_uses_udp_advertise() {
+    let scenario = async {
+        // Advertise a non-local public IP. Binding must still succeed (on the
+        // control connection's local IP), and the reply must carry the
+        // advertised IP — proving advertise is decoupled from bind.
+        let mut cfg = no_auth_config();
+        cfg.udp.advertise = Some("203.0.113.9".to_string());
+        let proxy_addr = start_server_with_config(cfg).await;
+
+        let mut control = TcpStream::connect(proxy_addr).await.unwrap();
+        control.write_all(&[0x05, 0x01, 0x00]).await.unwrap();
+        let mut method_reply = [0u8; 2];
+        control.read_exact(&mut method_reply).await.unwrap();
+        assert_eq!(method_reply, [0x05, 0x00]);
+
+        control
+            .write_all(&[0x05, 0x03, 0x00, 0x01, 0, 0, 0, 0, 0, 0])
+            .await
+            .unwrap();
+        let mut reply = [0u8; 10];
+        control.read_exact(&mut reply).await.unwrap();
+        assert_eq!(reply[1], 0x00, "expected success reply code");
+        assert_eq!(reply[3], 0x01, "BND.ADDR must be ATYP IPv4");
+
+        let bnd_ip = std::net::Ipv4Addr::new(reply[4], reply[5], reply[6], reply[7]);
+        assert_eq!(
+            bnd_ip,
+            std::net::Ipv4Addr::new(203, 0, 113, 9),
+            "BND.ADDR must be the configured advertise IP, not the bound IP"
+        );
+
+        drop(control);
+    };
+    tokio::time::timeout(Duration::from_secs(5), scenario)
+        .await
+        .expect("udp advertise scenario timed out");
+}
+
 /// Build a config requiring RFC 1929 username/password auth with a single
 /// `alice`/`secret` credential pair.
 fn password_config() -> Config {
