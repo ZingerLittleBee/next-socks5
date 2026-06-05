@@ -252,6 +252,42 @@ enabled = true             # 本地 attach 端点(默认开启)
 [`config.example.toml`](config.example.toml)。中继前的握手受 `timeouts.handshake_ms`
 (默认 10 秒)限制,以丢弃 slowloris 式的卡住客户端。
 
+### UDP 中继与 NAT / Docker
+
+`CONNECT` 在单个 TCP 监听端口上工作,但 **UDP ASSOCIATE** 使用独立的 UDP 中继套接字。默认情况下,每个关联(association)会绑定一个由操作系统分配的临时 UDP 端口,服务器会通告一个 `BND.ADDR:BND.PORT` 地址,客户端**必须**将其数据报发送到该地址(RFC 1928)。两个 `[udp]` 选项让这一机制能够穿透防火墙和 NAT:
+
+```toml
+[udp]
+port_range = "40000-40100"   # 将 UDP 中继套接字绑定到此闭区间范围
+advertise  = "203.0.113.42"  # 通告的 BND IP(客户端可达的地址)
+```
+
+- **`port_range`** —— 将每个关联的 UDP 套接字绑定到已知范围内,而非随机的临时端口,这样防火墙/NAT 只需开放该范围即可。每个关联会绑定各自的套接字,因此范围大小应 **≥ 预期的并发 UDP 客户端数量**;`"40000-40000"` 只有一个端口,会导致 UDP 串行化。当范围耗尽时,UDP ASSOCIATE 会返回通用失败(general failure)应答。
+- **`advertise`** —— 写入 UDP ASSOCIATE 应答中的 IP。默认情况下,服务器会通告客户端 TCP 连接抵达时所用的服务器侧 IP(即控制套接字的本地地址);当该 IP 对客户端不可达时(例如服务器位于 NAT 之后,或使用 Docker 桥接网络),请覆盖此项。通告的**端口始终是真实绑定的端口**,因此任何 NAT/转发都必须**端口保持一致(1:1)**。通告地址不可达是「TCP 可用但 UDP 不可用」的头号原因。可接受裸 IP 或 `ip:port` 格式(端口会被忽略);格式错误的值会在启动时被拒绝,而不会被静默忽略。
+
+**Docker。** 随附的 compose 配置使用 `network_mode: host`(Linux),无需任何端口映射。若使用桥接网络,请使用**短语法**发布 TCP 控制端口和 UDP 范围(Compose 长语法不支持范围),并将 `advertise` 设置为宿主机的公网 IP:
+
+```yaml
+ports:
+  - "1080:1080/tcp"
+  - "40000-40100:40000-40100/udp"
+```
+
+在默认的 userland 代理下,请保持范围较小(Docker 会为每个已发布端口启动一个 `docker-proxy` 进程);对于较大的范围,请设置 `userland-proxy=false` 或改用 host 网络。
+
+**防火墙**(范围 `40000-40100/udp` + 控制端口 `1080/tcp`):
+
+```bash
+# ufw
+ufw allow 1080/tcp && ufw allow 40000:40100/udp
+# nftables
+nft add rule inet filter input udp dport 40000-40100 accept
+# iptables
+iptables -A INPUT -p udp --dport 40000:40100 -j ACCEPT
+```
+
+**端口重映射(PAT / 对称型)NAT** 无法与多端口范围协同工作(转换后所通告的内部端口是错误的)。请使用单个固定端口(`"40000-40000"`)并对该端口做 1:1 转发,或将服务部署在可直接访问的公网 IP 上。
+
 ### 命令行
 
 ```
