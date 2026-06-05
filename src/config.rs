@@ -20,9 +20,9 @@ pub struct Config {
     /// Resource limits.
     #[serde(default)]
     pub limits: Limits,
-    /// Advertised BND address for UDP ASSOCIATE replies (optional).
+    /// UDP relay transport/addressing configuration.
     #[serde(default)]
-    pub public_addr: Option<String>,
+    pub udp: UdpConfig,
     /// Admin/attach endpoint settings.
     #[serde(default)]
     pub admin: AdminConfig,
@@ -118,6 +118,94 @@ impl Default for Timeouts {
             udp_idle_ms: 60_000,
         }
     }
+}
+
+/// An inclusive UDP relay port range `[start, end]` for binding association
+/// sockets. `start == end` is a single fixed port. Deserialized from a
+/// `"start-end"` string (e.g. `"40000-40100"`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PortRange {
+    /// First port in the range (inclusive); must be >= 1.
+    pub start: u16,
+    /// Last port in the range (inclusive); must be >= `start`.
+    pub end: u16,
+}
+
+impl PortRange {
+    /// Parse an inclusive `"start-end"` range. Rejects a missing dash,
+    /// non-numeric bounds, port 0 as `start`, and `start > end`.
+    fn parse(s: &str) -> Result<PortRange, String> {
+        let (start, end) = s
+            .split_once('-')
+            .ok_or_else(|| format!("expected 'start-end', got {s:?}"))?;
+        let start: u16 = start
+            .trim()
+            .parse()
+            .map_err(|_| format!("invalid start port {start:?}"))?;
+        let end: u16 = end
+            .trim()
+            .parse()
+            .map_err(|_| format!("invalid end port {end:?}"))?;
+        if start == 0 {
+            return Err("start port must be >= 1".to_string());
+        }
+        if start > end {
+            return Err(format!("start {start} must be <= end {end}"));
+        }
+        Ok(PortRange { start, end })
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for PortRange {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let s = String::deserialize(deserializer)?;
+        PortRange::parse(&s).map_err(serde::de::Error::custom)
+    }
+}
+
+/// UDP relay transport/addressing configuration.
+#[derive(Debug, Clone, serde::Deserialize, PartialEq, Eq, Default)]
+pub struct UdpConfig {
+    /// Bind each association's relay socket inside this inclusive port range.
+    /// `None` => OS-assigned ephemeral port.
+    #[serde(default)]
+    pub port_range: Option<PortRange>,
+    /// Advertised BND.ADDR IP for UDP ASSOCIATE replies (advertise-only; the
+    /// advertised port is always the real bound port). `None` => advertise the
+    /// bound address. Needed behind NAT/Docker. Accepts a bare IP or an
+    /// `ip:port` (the port is ignored); a malformed value is rejected at config
+    /// load so a typo fails fast instead of being silently ignored at runtime.
+    #[serde(default, deserialize_with = "de_advertise_ip")]
+    pub advertise: Option<std::net::IpAddr>,
+}
+
+/// Deserialize `[udp].advertise`: accept a bare IP or an `ip:port` (the port is
+/// ignored — only the IP is advertised), rejecting anything else at config load.
+fn de_advertise_ip<'de, D>(deserializer: D) -> Result<Option<std::net::IpAddr>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let s = <String as serde::Deserialize>::deserialize(deserializer)?;
+    parse_advertise_ip(&s)
+        .map(Some)
+        .map_err(serde::de::Error::custom)
+}
+
+/// Parse a `[udp].advertise` value into an IP. Accepts a bare IP, or an
+/// `ip:port` whose port is discarded; returns an error message otherwise.
+fn parse_advertise_ip(s: &str) -> Result<std::net::IpAddr, String> {
+    if let Ok(ip) = s.parse::<std::net::IpAddr>() {
+        return Ok(ip);
+    }
+    if let Ok(sa) = s.parse::<std::net::SocketAddr>() {
+        return Ok(sa.ip());
+    }
+    Err(format!(
+        "invalid advertise address {s:?}: expected an IP (e.g. \"203.0.113.42\") or \"ip:port\""
+    ))
 }
 
 /// Resource limits.
@@ -322,7 +410,7 @@ impl Config {
             auth: AuthConfig::default(),
             timeouts: Timeouts::default(),
             limits: Limits::default(),
-            public_addr: None,
+            udp: UdpConfig::default(),
             admin: AdminConfig::default(),
             egress: Egress::default(),
         }
@@ -393,7 +481,7 @@ max_connections = 1024
         assert!(cfg.auth.users.is_empty());
         assert_eq!(cfg.timeouts, Timeouts::default());
         assert_eq!(cfg.limits.max_connections, None);
-        assert_eq!(cfg.public_addr, None);
+        assert_eq!(cfg.udp, UdpConfig::default());
     }
 
     #[test]
@@ -516,5 +604,64 @@ max_connections = 1024
         assert!(!e.is_blocked("10.0.0.1".parse::<IpAddr>().unwrap()));
         // The unspecified address is blocked regardless of policy.
         assert!(e.is_blocked("0.0.0.0".parse::<IpAddr>().unwrap()));
+    }
+
+    #[test]
+    fn port_range_parses_valid() {
+        assert_eq!(
+            PortRange::parse("40000-40100"),
+            Ok(PortRange { start: 40000, end: 40100 })
+        );
+    }
+
+    #[test]
+    fn port_range_allows_single_port() {
+        assert_eq!(
+            PortRange::parse("40000-40000"),
+            Ok(PortRange { start: 40000, end: 40000 })
+        );
+    }
+
+    #[test]
+    fn port_range_rejects_malformed() {
+        assert!(PortRange::parse("5000").is_err()); // no dash
+        assert!(PortRange::parse("a-b").is_err()); // non-numeric
+        assert!(PortRange::parse("5000-4000").is_err()); // start > end
+        assert!(PortRange::parse("0-100").is_err()); // start port 0
+    }
+
+    #[test]
+    fn parses_udp_section() {
+        let cfg = Config::from_toml_str(
+            "listen = \"x\"\n[udp]\nport_range = \"40000-40100\"\nadvertise = \"203.0.113.42\"",
+        )
+        .expect("should parse");
+        assert_eq!(
+            cfg.udp.port_range,
+            Some(PortRange { start: 40000, end: 40100 })
+        );
+        assert_eq!(cfg.udp.advertise, Some("203.0.113.42".parse().unwrap()));
+    }
+
+    #[test]
+    fn udp_section_defaults_empty() {
+        let cfg = Config::from_toml_str("listen = \"x\"").expect("should parse");
+        assert_eq!(cfg.udp, UdpConfig::default());
+    }
+
+    #[test]
+    fn advertise_rejects_malformed() {
+        // A typo'd advertise address must fail at config load, not be silently
+        // ignored at runtime.
+        let res = Config::from_toml_str("listen = \"x\"\n[udp]\nadvertise = \"not-an-ip\"");
+        assert!(res.is_err(), "malformed advertise must be rejected at load");
+    }
+
+    #[test]
+    fn advertise_accepts_ip_port() {
+        // An `ip:port` form is accepted; only the IP is kept (port ignored).
+        let cfg = Config::from_toml_str("listen = \"x\"\n[udp]\nadvertise = \"203.0.113.42:1080\"")
+            .expect("ip:port advertise should parse");
+        assert_eq!(cfg.udp.advertise, Some("203.0.113.42".parse().unwrap()));
     }
 }

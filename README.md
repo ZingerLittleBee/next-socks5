@@ -263,6 +263,66 @@ need to reach internal targets, relax it with an `[egress]` section — see
 [`config.example.toml`](config.example.toml). The pre-relay handshake is bounded by
 `timeouts.handshake_ms` (default 10s) to drop slowloris-style stalled clients.
 
+### UDP relay & NAT / Docker
+
+`CONNECT` works over the single TCP listen port, but **UDP ASSOCIATE** uses a
+separate UDP relay socket. By default each association binds an OS-assigned
+ephemeral UDP port and the server advertises a `BND.ADDR:BND.PORT` that the client
+**must** send its datagrams to (RFC 1928). Two `[udp]` options make this work
+through firewalls and NAT:
+
+```toml
+[udp]
+port_range = "40000-40100"   # bind UDP relay sockets to this inclusive range
+advertise  = "203.0.113.42"  # advertised BND IP (a client-reachable address)
+```
+
+- **`port_range`** — bind each association's UDP socket inside a known range
+  instead of a random ephemeral port, so a firewall/NAT only needs that range
+  opened. Each association binds its own socket, so size the range **≥ your
+  expected concurrent UDP clients**; `"40000-40000"` is a single port and
+  serializes UDP. When the range is exhausted, UDP ASSOCIATE returns a general
+  failure.
+- **`advertise`** — the IP put in the UDP ASSOCIATE reply. By default the server
+  advertises the server-side IP the client's TCP connection arrived on (the
+  control socket's local address); override it when that
+  IP is not client-reachable (behind NAT, or Docker bridge networking). The
+  advertised **port is always the real bound port**, so any NAT/forward must be
+  **port-preserving (1:1)**. An unreachable advertised address is the #1 cause of
+  "TCP works but UDP doesn't". Accepts a bare IP or `ip:port` (port ignored); a
+  malformed value is rejected at startup rather than silently ignored.
+
+**Docker.** The provided compose uses `network_mode: host` (Linux), which needs no
+port mapping. For bridge networking, publish the TCP control port and the UDP
+range with **short syntax** (Compose long syntax has no range support) and set
+`advertise` to the host's public IP:
+
+```yaml
+ports:
+  - "1080:1080/tcp"
+  - "40000-40100:40000-40100/udp"
+```
+
+Keep the range small with the default userland proxy (Docker spawns one
+`docker-proxy` process per published port); for large ranges set
+`userland-proxy=false` or use host networking.
+
+**Firewall** (range `40000-40100/udp` + control `1080/tcp`):
+
+```bash
+# ufw
+ufw allow 1080/tcp && ufw allow 40000:40100/udp
+# nftables
+nft add rule inet filter input udp dport 40000-40100 accept
+# iptables
+iptables -A INPUT -p udp --dport 40000:40100 -j ACCEPT
+```
+
+**Port-remapping (PAT / symmetric) NAT** cannot work with a multi-port range (the
+advertised internal port is wrong after translation). Use a single fixed port
+(`"40000-40000"`) with a 1:1 forward of that one port, or host on a directly
+reachable public IP.
+
 ### CLI
 
 ```

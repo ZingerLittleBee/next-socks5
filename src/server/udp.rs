@@ -16,6 +16,7 @@ use tokio::net::{TcpStream, UdpSocket};
 use tokio::sync::{broadcast, watch};
 
 use crate::config::Config;
+use crate::error::Socks5Error;
 use crate::metrics::{ConnKind, Event, Metrics};
 use crate::protocol::address::Address;
 use crate::protocol::reply::{encode_reply, REP_SUCCEEDED};
@@ -41,24 +42,36 @@ pub async fn run(
     events: broadcast::Sender<Event>,
     mut shutdown: watch::Receiver<bool>,
 ) {
-    // 1. Determine the IP the client can reach us on, and bind a UDP socket on
-    //    an ephemeral port of that IP. Never advertise an unspecified address.
-    let bind_ip = match resolve_bind_ip(&cfg, &control) {
-        Some(ip) => ip,
-        None => return,
+    // 1. Bind a per-association UDP relay socket on the control connection's
+    //    local IP — a local interface the TCP handshake already succeeded on.
+    let bind_ip = match control.local_addr() {
+        Ok(addr) => addr.ip(),
+        Err(_) => return,
     };
 
-    let udp_sock = match UdpSocket::bind((bind_ip, 0)).await {
+    let udp_sock = match bind_with_retry(bind_ip, cfg.udp.port_range).await {
         Ok(sock) => sock,
-        Err(_) => return,
+        // Range exhausted or a fatal bind error: tell the client instead of
+        // dropping the request silently.
+        Err(_) => {
+            reply_general_failure(&mut control).await;
+            let _ = events.send(Event::Error {
+                code: Socks5Error::General.reply_code(),
+                msg: "udp relay bind failed (port range exhausted?)".to_string(),
+            });
+            return;
+        }
     };
     let bnd_local = match udp_sock.local_addr() {
         Ok(addr) => addr,
         Err(_) => return,
     };
 
-    // 2. Reply success with the bound UDP address as BND.ADDR/PORT.
-    let bnd_address = addr_from_socket(bnd_local);
+    // 2. Advertise BND.ADDR/PORT: the configured advertise IP (for NAT/Docker)
+    //    when set, else the bound IP. The advertised PORT is always the real
+    //    bound port — where the client must send its datagrams.
+    let advertise_ip = resolve_advertise_ip(&cfg).unwrap_or_else(|| bnd_local.ip());
+    let bnd_address = addr_from_socket(SocketAddr::new(advertise_ip, bnd_local.port()));
     let mut out = Vec::with_capacity(22);
     encode_reply(REP_SUCCEEDED, &bnd_address, &mut out);
     if control.write_all(&out).await.is_err() {
@@ -237,29 +250,66 @@ pub async fn run(
     let _ = events.send(Event::Closed { id });
 }
 
-/// Determine the client-reachable IP to bind the relay UDP socket on.
-///
-/// Prefers `cfg.public_addr` (parsed as an IP) when set, otherwise the control
-/// connection's local IP. An unspecified address (`0.0.0.0` / `::`) is never
-/// advertised, so it falls back to loopback.
-fn resolve_bind_ip(cfg: &Config, control: &TcpStream) -> Option<IpAddr> {
-    let ip = match &cfg.public_addr {
-        Some(s) => parse_ip(s)?,
-        None => control.local_addr().ok()?.ip(),
+/// Rotating start offset so concurrent associations spread across the configured
+/// port range instead of all probing the first port.
+static PORT_CURSOR: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// Bind a UDP relay socket on `bind_ip`. With no range, the OS assigns an
+/// ephemeral port. With a range, scan the inclusive `[start, end]` from a
+/// rotating cursor, skipping in-use / privileged ports, and error only when
+/// every port in the range is unavailable.
+async fn bind_with_retry(
+    bind_ip: IpAddr,
+    range: Option<crate::config::PortRange>,
+) -> std::io::Result<UdpSocket> {
+    use std::sync::atomic::Ordering;
+    let range = match range {
+        None => return UdpSocket::bind((bind_ip, 0)).await,
+        Some(r) => r,
     };
+    let width = (range.end - range.start) as u32 + 1;
+    let base = PORT_CURSOR.fetch_add(1, Ordering::Relaxed);
+    for i in 0..width {
+        let port = range.start + (base.wrapping_add(i) % width) as u16;
+        match UdpSocket::bind((bind_ip, port)).await {
+            Ok(sock) => return Ok(sock),
+            Err(e) => match e.kind() {
+                // Port taken, or privileged (<1024 without CAP_NET_BIND_SERVICE):
+                // try the next candidate.
+                std::io::ErrorKind::AddrInUse | std::io::ErrorKind::PermissionDenied => {
+                    continue
+                }
+                // Anything else (e.g. address not available) is fatal.
+                _ => return Err(e),
+            },
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AddrInUse,
+        "udp_port_range exhausted",
+    ))
+}
+
+/// Send a best-effort SOCKS5 general-failure reply (REP=0x01) with a zeroed IPv4
+/// BND, used when the relay socket cannot be bound.
+async fn reply_general_failure(control: &mut TcpStream) {
+    let bnd = Address::V4(Ipv4Addr::UNSPECIFIED, 0);
+    let mut out = Vec::with_capacity(10);
+    encode_reply(Socks5Error::General.reply_code(), &bnd, &mut out);
+    let _ = control.write_all(&out).await;
+}
+
+/// Advertised BND IP for UDP ASSOCIATE replies: the configured `[udp].advertise`
+/// IP when set and usable, else `None` (the caller falls back to the bound IP).
+/// The value is validated to a real IP at config load; an unspecified address
+/// (`0.0.0.0` / `::`) is rejected here — never advertised.
+fn resolve_advertise_ip(cfg: &Config) -> Option<IpAddr> {
+    let ip = cfg.udp.advertise?;
     if ip.is_unspecified() {
-        Some(IpAddr::V4(Ipv4Addr::LOCALHOST))
+        None
     } else {
         Some(ip)
     }
-}
-
-/// Parse an IP from a `public_addr` value that may be a bare IP or `ip:port`.
-fn parse_ip(s: &str) -> Option<IpAddr> {
-    if let Ok(ip) = s.parse::<IpAddr>() {
-        return Some(ip);
-    }
-    s.parse::<SocketAddr>().ok().map(|sa| sa.ip())
 }
 
 /// Build a SOCKS5 [`Address`] from a [`SocketAddr`].

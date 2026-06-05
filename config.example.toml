@@ -19,6 +19,24 @@ max_connections = 1024     # optional: cap on concurrent connections, enforced a
 udp_max_targets = 1024     # distinct targets tracked per UDP association
 # udp_rate_pps = 5000      # optional: outbound datagrams/sec per association
 
+[udp]
+# Bind each UDP association's relay socket inside an inclusive port range instead
+# of an OS-assigned ephemeral port, so a firewall/NAT only needs that range open.
+# Size the range >= expected concurrent UDP associations (each binds its own
+# socket); "40000-40000" is a single port and serializes UDP. When the range is
+# exhausted, UDP ASSOCIATE replies with a general failure (0x01).
+# port_range = "40000-40100"
+#
+# Advertised BND.ADDR (IP only) returned in UDP ASSOCIATE replies. By default the
+# server advertises the server-side IP the client's TCP control connection arrived
+# on (the control socket's local address).
+# Override it when that IP is not client-reachable (behind NAT, or Docker with
+# bridge networking): set the public/forwarded IP clients will use. The advertised
+# PORT is always the real bound port, so any NAT/forward must be port-preserving
+# (1:1). A port in "ip:port" form is ignored. A value that is not a valid IP is
+# rejected at startup (the server refuses to start) rather than silently ignored.
+# advertise = "203.0.113.42"
+
 # Egress policy guards against SSRF / open-relay abuse. Secure by default: all
 # blocked. Set a class to false to allow it (e.g. an internal LAN proxy).
 [egress]
