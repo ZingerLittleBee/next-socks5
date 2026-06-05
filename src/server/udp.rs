@@ -16,6 +16,7 @@ use tokio::net::{TcpStream, UdpSocket};
 use tokio::sync::{broadcast, watch};
 
 use crate::config::Config;
+use crate::error::Socks5Error;
 use crate::metrics::{ConnKind, Event, Metrics};
 use crate::protocol::address::Address;
 use crate::protocol::reply::{encode_reply, REP_SUCCEEDED};
@@ -48,9 +49,18 @@ pub async fn run(
         Err(_) => return,
     };
 
-    let udp_sock = match UdpSocket::bind((bind_ip, 0)).await {
+    let udp_sock = match bind_with_retry(bind_ip, cfg.udp.port_range).await {
         Ok(sock) => sock,
-        Err(_) => return,
+        // Range exhausted or a fatal bind error: tell the client instead of
+        // dropping the request silently.
+        Err(_) => {
+            reply_general_failure(&mut control).await;
+            let _ = events.send(Event::Error {
+                code: Socks5Error::General.reply_code(),
+                msg: "udp relay bind failed (port range exhausted?)".to_string(),
+            });
+            return;
+        }
     };
     let bnd_local = match udp_sock.local_addr() {
         Ok(addr) => addr,
@@ -238,6 +248,55 @@ pub async fn run(
     metrics.record_success();
     metrics.unregister(id);
     let _ = events.send(Event::Closed { id });
+}
+
+/// Rotating start offset so concurrent associations spread across the configured
+/// port range instead of all probing the first port.
+static PORT_CURSOR: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
+/// Bind a UDP relay socket on `bind_ip`. With no range, the OS assigns an
+/// ephemeral port. With a range, scan the inclusive `[start, end]` from a
+/// rotating cursor, skipping in-use / privileged ports, and error only when
+/// every port in the range is unavailable.
+async fn bind_with_retry(
+    bind_ip: IpAddr,
+    range: Option<crate::config::PortRange>,
+) -> std::io::Result<UdpSocket> {
+    use std::sync::atomic::Ordering;
+    let range = match range {
+        None => return UdpSocket::bind((bind_ip, 0)).await,
+        Some(r) => r,
+    };
+    let width = (range.end - range.start) as u32 + 1;
+    let base = PORT_CURSOR.fetch_add(1, Ordering::Relaxed);
+    for i in 0..width {
+        let port = range.start + (base.wrapping_add(i) % width) as u16;
+        match UdpSocket::bind((bind_ip, port)).await {
+            Ok(sock) => return Ok(sock),
+            Err(e) => match e.kind() {
+                // Port taken, or privileged (<1024 without CAP_NET_BIND_SERVICE):
+                // try the next candidate.
+                std::io::ErrorKind::AddrInUse | std::io::ErrorKind::PermissionDenied => {
+                    continue
+                }
+                // Anything else (e.g. address not available) is fatal.
+                _ => return Err(e),
+            },
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AddrInUse,
+        "udp_port_range exhausted",
+    ))
+}
+
+/// Send a best-effort SOCKS5 general-failure reply (REP=0x01) with a zeroed IPv4
+/// BND, used when the relay socket cannot be bound.
+async fn reply_general_failure(control: &mut TcpStream) {
+    let bnd = Address::V4(Ipv4Addr::UNSPECIFIED, 0);
+    let mut out = Vec::with_capacity(10);
+    encode_reply(Socks5Error::General.reply_code(), &bnd, &mut out);
+    let _ = control.write_all(&out).await;
 }
 
 /// Advertised BND IP for UDP ASSOCIATE replies: the configured `[udp].advertise`

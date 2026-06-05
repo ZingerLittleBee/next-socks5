@@ -250,6 +250,58 @@ async fn udp_advertised_addr_uses_udp_advertise() {
         .expect("udp advertise scenario timed out");
 }
 
+#[tokio::test]
+async fn udp_bnd_port_within_configured_range() {
+    let scenario = async {
+        let echo_addr = spawn_udp_echo_server().await;
+        let echo_v4 = match echo_addr.ip() {
+            std::net::IpAddr::V4(v4) => v4,
+            std::net::IpAddr::V6(_) => panic!("expected v4 echo addr"),
+        };
+
+        let mut cfg = no_auth_config();
+        cfg.udp.port_range = Some(next_socks5::config::PortRange { start: 41000, end: 41050 });
+        let proxy_addr = start_server_with_config(cfg).await;
+
+        let mut control = TcpStream::connect(proxy_addr).await.unwrap();
+        control.write_all(&[0x05, 0x01, 0x00]).await.unwrap();
+        let mut method_reply = [0u8; 2];
+        control.read_exact(&mut method_reply).await.unwrap();
+        assert_eq!(method_reply, [0x05, 0x00]);
+
+        control
+            .write_all(&[0x05, 0x03, 0x00, 0x01, 0, 0, 0, 0, 0, 0])
+            .await
+            .unwrap();
+        let mut reply = [0u8; 10];
+        control.read_exact(&mut reply).await.unwrap();
+        assert_eq!(reply[1], 0x00, "expected success reply code");
+
+        let bnd_ip = std::net::Ipv4Addr::new(reply[4], reply[5], reply[6], reply[7]);
+        let bnd_port = u16::from_be_bytes([reply[8], reply[9]]);
+        assert!(
+            (41000..=41050).contains(&bnd_port),
+            "BND.PORT {bnd_port} not in configured range"
+        );
+        let relay_udp_addr = std::net::SocketAddr::from((bnd_ip, bnd_port));
+
+        // The relay still functions on a ranged port.
+        let client_udp = UdpSocket::bind("127.0.0.1:0").await.unwrap();
+        let mut out = Vec::new();
+        udp::encap(&Address::V4(echo_v4, echo_addr.port()), b"hello", &mut out);
+        client_udp.send_to(&out, relay_udp_addr).await.unwrap();
+        let mut buf = [0u8; 65536];
+        let (n, _src) = client_udp.recv_from(&mut buf).await.unwrap();
+        let datagram = udp::decap(&buf[..n]).expect("valid SOCKS5 UDP datagram");
+        assert_eq!(datagram.data, b"hello");
+
+        drop(control);
+    };
+    tokio::time::timeout(Duration::from_secs(5), scenario)
+        .await
+        .expect("udp port range scenario timed out");
+}
+
 /// Build a config requiring RFC 1929 username/password auth with a single
 /// `alice`/`secret` credential pair.
 fn password_config() -> Config {
