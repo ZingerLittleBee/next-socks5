@@ -45,7 +45,7 @@ fn no_auth_config() -> Config {
         },
         timeouts: Timeouts::default(),
         limits: Limits::default(),
-        public_addr: None,
+        udp: Default::default(),
         admin: Default::default(),
         // Tests relay to loopback echo servers; allow it.
         egress: Egress::permissive(),
@@ -225,7 +225,7 @@ fn password_config() -> Config {
         },
         timeouts: Timeouts::default(),
         limits: Limits::default(),
-        public_addr: None,
+        udp: Default::default(),
         admin: Default::default(),
         // Tests relay to loopback echo servers; allow it.
         egress: Egress::permissive(),

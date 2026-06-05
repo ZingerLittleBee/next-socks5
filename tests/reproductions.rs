@@ -30,7 +30,7 @@ fn no_auth_config() -> Config {
         },
         timeouts: Timeouts::default(),
         limits: Limits::default(),
-        public_addr: None,
+        udp: Default::default(),
         admin: Default::default(),
         // Relay reproduction tests dial loopback helpers; allow it. The SSRF
         // test builds its own secure-egress config.
@@ -50,7 +50,7 @@ fn password_config() -> Config {
         },
         timeouts: Timeouts::default(),
         limits: Limits::default(),
-        public_addr: None,
+        udp: Default::default(),
         admin: Default::default(),
         // Relay reproduction tests dial loopback helpers; allow it. The SSRF
         // test builds its own secure-egress config.

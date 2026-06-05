@@ -239,11 +239,11 @@ pub async fn run(
 
 /// Determine the client-reachable IP to bind the relay UDP socket on.
 ///
-/// Prefers `cfg.public_addr` (parsed as an IP) when set, otherwise the control
+/// Prefers `cfg.udp.advertise` (parsed as an IP) when set, otherwise the control
 /// connection's local IP. An unspecified address (`0.0.0.0` / `::`) is never
 /// advertised, so it falls back to loopback.
 fn resolve_bind_ip(cfg: &Config, control: &TcpStream) -> Option<IpAddr> {
-    let ip = match &cfg.public_addr {
+    let ip = match &cfg.udp.advertise {
         Some(s) => parse_ip(s)?,
         None => control.local_addr().ok()?.ip(),
     };
@@ -254,7 +254,7 @@ fn resolve_bind_ip(cfg: &Config, control: &TcpStream) -> Option<IpAddr> {
     }
 }
 
-/// Parse an IP from a `public_addr` value that may be a bare IP or `ip:port`.
+/// Parse an IP from a `udp.advertise` value that may be a bare IP or `ip:port`.
 fn parse_ip(s: &str) -> Option<IpAddr> {
     if let Ok(ip) = s.parse::<IpAddr>() {
         return Some(ip);

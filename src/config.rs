@@ -20,9 +20,9 @@ pub struct Config {
     /// Resource limits.
     #[serde(default)]
     pub limits: Limits,
-    /// Advertised BND address for UDP ASSOCIATE replies (optional).
+    /// UDP relay transport/addressing configuration.
     #[serde(default)]
-    pub public_addr: Option<String>,
+    pub udp: UdpConfig,
     /// Admin/attach endpoint settings.
     #[serde(default)]
     pub admin: AdminConfig,
@@ -164,6 +164,20 @@ impl<'de> serde::Deserialize<'de> for PortRange {
         let s = String::deserialize(deserializer)?;
         PortRange::parse(&s).map_err(serde::de::Error::custom)
     }
+}
+
+/// UDP relay transport/addressing configuration.
+#[derive(Debug, Clone, serde::Deserialize, PartialEq, Eq, Default)]
+pub struct UdpConfig {
+    /// Bind each association's relay socket inside this inclusive port range.
+    /// `None` => OS-assigned ephemeral port.
+    #[serde(default)]
+    pub port_range: Option<PortRange>,
+    /// Advertised BND.ADDR IP for UDP ASSOCIATE replies (advertise-only; the
+    /// advertised port is always the real bound port). `None` => advertise the
+    /// bound address. Needed behind NAT/Docker.
+    #[serde(default)]
+    pub advertise: Option<String>,
 }
 
 /// Resource limits.
@@ -368,7 +382,7 @@ impl Config {
             auth: AuthConfig::default(),
             timeouts: Timeouts::default(),
             limits: Limits::default(),
-            public_addr: None,
+            udp: UdpConfig::default(),
             admin: AdminConfig::default(),
             egress: Egress::default(),
         }
@@ -439,7 +453,7 @@ max_connections = 1024
         assert!(cfg.auth.users.is_empty());
         assert_eq!(cfg.timeouts, Timeouts::default());
         assert_eq!(cfg.limits.max_connections, None);
-        assert_eq!(cfg.public_addr, None);
+        assert_eq!(cfg.udp, UdpConfig::default());
     }
 
     #[test]
@@ -586,5 +600,24 @@ max_connections = 1024
         assert!(PortRange::parse("a-b").is_err()); // non-numeric
         assert!(PortRange::parse("5000-4000").is_err()); // start > end
         assert!(PortRange::parse("0-100").is_err()); // start port 0
+    }
+
+    #[test]
+    fn parses_udp_section() {
+        let cfg = Config::from_toml_str(
+            "listen = \"x\"\n[udp]\nport_range = \"40000-40100\"\nadvertise = \"203.0.113.42\"",
+        )
+        .expect("should parse");
+        assert_eq!(
+            cfg.udp.port_range,
+            Some(PortRange { start: 40000, end: 40100 })
+        );
+        assert_eq!(cfg.udp.advertise.as_deref(), Some("203.0.113.42"));
+    }
+
+    #[test]
+    fn udp_section_defaults_empty() {
+        let cfg = Config::from_toml_str("listen = \"x\"").expect("should parse");
+        assert_eq!(cfg.udp, UdpConfig::default());
     }
 }
