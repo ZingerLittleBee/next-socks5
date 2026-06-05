@@ -80,6 +80,9 @@ URL and a `curl` test command.
 # Bind to a single interface instead of 0.0.0.0 (here: localhost only)
 ./install.sh --no-auth --listen 127.0.0.1 --port 1080
 
+# UDP relay behind NAT/Docker: pin the relay port range and advertise a public IP
+./install.sh --port 1080 --udp-port-range 40000-40100 --udp-advertise 203.0.113.42
+
 # Pin a specific release instead of `latest`
 ./install.sh --version v0.2.0 --port 1080
 
@@ -98,6 +101,8 @@ URL and a `curl` test command.
 | `--user` / `--pass` | Credentials for auth mode (random if omitted) | random |
 | `--port <port>` | Listen port (random free port if omitted) | random |
 | `--listen <addr>` | Bind address | `0.0.0.0` |
+| `--udp-port-range <range>` | Bind UDP relay sockets inside an inclusive range (e.g. `40000-40100`) | OS ephemeral |
+| `--udp-advertise <ip>` | Advertised BND IP for UDP behind NAT/Docker (a client-reachable address) | bound IP |
 | `--version <tag>` | Release version, e.g. `v0.1.0` | `latest` |
 | `--bin-dir <dir>` | Binary install directory (binary method) | `/usr/local/bin` |
 | `--dir <dir>` | Docker deploy directory (docker method) | `./next-socks5-deploy` |

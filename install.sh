@@ -10,6 +10,7 @@
 #   ./install.sh --method docker          # docker compose, auth on (random creds), random port
 #   ./install.sh --no-auth --port 1080    # no auth, fixed port
 #   ./install.sh --auth --user bob --pass s3cret --port 1080
+#   ./install.sh --udp-port-range 40000-40100 --udp-advertise 203.0.113.42
 #
 set -eu
 
@@ -28,6 +29,8 @@ LISTEN_ADDR="0.0.0.0"     # bind address inside config
 VERSION="latest"          # release tag (e.g. v0.1.0) or "latest"
 BIN_DIR="/usr/local/bin"  # binary install dir
 DEPLOY_DIR="./next-socks5-deploy"   # docker compose dir
+UDP_PORT_RANGE=""         # e.g. 40000-40100 => [udp].port_range (commented when empty)
+UDP_ADVERTISE=""          # client-reachable BND IP => [udp].advertise (commented when empty)
 NO_SERVICE="${NO_SERVICE:-no}"      # skip init service setup (env or --no-service)
 STARTED="no"                        # flipped to "yes" once a service is started
 
@@ -49,6 +52,12 @@ Usage: install.sh [options]
   --pass <password>         Auth password (auth mode; random if omitted).
   --port <port>             Listen port (random free port if omitted).
   --listen <addr>           Bind address (default 0.0.0.0).
+  --udp-port-range <range>  Bind UDP relay sockets inside an inclusive port range
+                            (e.g. 40000-40100), so a firewall/NAT only needs that
+                            range opened. Omitted => OS-assigned ephemeral port.
+  --udp-advertise <ip>      Advertised BND IP in UDP ASSOCIATE replies. Set to a
+                            client-reachable IP when the server is behind NAT/Docker
+                            (omitted => advertise the bound address).
   --version <tag>           Release version, e.g. v0.1.0 (default: latest).
   --bin-dir <dir>           Binary install dir (default /usr/local/bin).
   --dir <dir>               Docker deploy dir (default ./next-socks5-deploy).
@@ -63,6 +72,9 @@ Notes:
     it manually, or use --method docker for a self-restarting container.
   * Docker install uses host networking so UDP ASSOCIATE works correctly
     (Linux hosts; Docker Desktop on macOS/Windows does not support host mode).
+  * --udp-advertise / --udp-port-range write the [udp] section of config.toml.
+    For bridge networking instead of host mode, also publish the UDP range in the
+    generated docker-compose.yml (a pre-filled, commented example is included).
 EOF
 }
 
@@ -156,8 +168,16 @@ render_config() {
   echo "udp_idle_ms = 60000"
   echo ""
   echo "[udp]"
-  echo "# port_range = \"40000-40100\"      # bind UDP relay sockets to this range"
-  echo "# advertise = \"YOUR_PUBLIC_IP\"    # advertised BND IP for clients behind NAT"
+  if [ -n "$UDP_PORT_RANGE" ]; then
+    echo "port_range = \"${UDP_PORT_RANGE}\"     # bind UDP relay sockets to this range"
+  else
+    echo "# port_range = \"40000-40100\"      # bind UDP relay sockets to this range"
+  fi
+  if [ -n "$UDP_ADVERTISE" ]; then
+    echo "advertise = \"${UDP_ADVERTISE}\"    # advertised BND IP for clients behind NAT"
+  else
+    echo "# advertise = \"YOUR_PUBLIC_IP\"    # advertised BND IP for clients behind NAT"
+  fi
 }
 
 # Resolve the public IP via api.ipify.org (used for the shown proxy URL).
@@ -192,6 +212,8 @@ while [ $# -gt 0 ]; do
     --pass)     PASSWORD="${2:?--pass needs a value}"; shift 2 ;;
     --port)     PORT="${2:?--port needs a value}"; shift 2 ;;
     --listen)   LISTEN_ADDR="${2:?--listen needs a value}"; shift 2 ;;
+    --udp-port-range) UDP_PORT_RANGE="${2:?--udp-port-range needs a value}"; shift 2 ;;
+    --udp-advertise)  UDP_ADVERTISE="${2:?--udp-advertise needs a value}"; shift 2 ;;
     --version)  VERSION="${2:?--version needs a value}"; shift 2 ;;
     --bin-dir)  BIN_DIR="${2:?--bin-dir needs a value}"; shift 2 ;;
     --dir)      DEPLOY_DIR="${2:?--dir needs a value}"; shift 2 ;;
@@ -210,6 +232,16 @@ if [ -z "$PORT" ]; then
   log "selected random free port: $PORT"
 fi
 case "$PORT" in *[!0-9]*) err "--port must be numeric";; esac
+
+# UDP relay options (both optional). The server validates them strictly at
+# startup; here we only sanity-check the range shape and surface what was set.
+if [ -n "$UDP_PORT_RANGE" ]; then
+  case "$UDP_PORT_RANGE" in
+    [0-9]*-[0-9]*) log "udp port_range: $UDP_PORT_RANGE" ;;
+    *) err "--udp-port-range must look like START-END (e.g. 40000-40100)" ;;
+  esac
+fi
+[ -n "$UDP_ADVERTISE" ] && log "udp advertise: $UDP_ADVERTISE"
 
 if [ "$AUTH" = "on" ]; then
   [ -n "$USERNAME" ] || { USERNAME="user_$(gen_secret 6)"; log "generated username: $USERNAME"; }
@@ -357,6 +389,10 @@ install_docker() {
   mkdir -p "$DEPLOY_DIR"
   render_config > "${DEPLOY_DIR}/config.toml"
 
+  # Pre-fill the commented bridge-mode UDP port mapping with the configured range
+  # (or the documented default) so switching off host networking is copy-paste.
+  udp_range_example="${UDP_PORT_RANGE:-40000-40100}"
+
   cat > "${DEPLOY_DIR}/docker-compose.yml" <<EOF
 services:
   next-socks5:
@@ -373,7 +409,7 @@ services:
     # range identical on both sides (port-preserving).
     #ports:
     #  - "${PORT}:${PORT}/tcp"
-    #  - "40000-40100:40000-40100/udp"
+    #  - "${udp_range_example}:${udp_range_example}/udp"
     volumes:
       - ./config.toml:/etc/next-socks5/config.toml:ro
     # Writable runtime dir for the admin/attach Unix socket. The image runs as an

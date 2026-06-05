@@ -76,6 +76,9 @@ curl -fsSL https://raw.githubusercontent.com/ZingerLittleBee/next-socks5/main/in
 # 绑定到单个网卡而非 0.0.0.0(此处:仅本机)
 ./install.sh --no-auth --listen 127.0.0.1 --port 1080
 
+# NAT/Docker 后的 UDP 中继:固定中继端口范围并通告公网 IP
+./install.sh --port 1080 --udp-port-range 40000-40100 --udp-advertise 203.0.113.42
+
 # 固定某个发布版本,而非 `latest`
 ./install.sh --version v0.2.0 --port 1080
 
@@ -94,6 +97,8 @@ curl -fsSL https://raw.githubusercontent.com/ZingerLittleBee/next-socks5/main/in
 | `--user` / `--pass` | 认证模式的凭证(省略则随机) | 随机 |
 | `--port <port>` | 监听端口(省略则随机选空闲端口) | 随机 |
 | `--listen <addr>` | 绑定地址 | `0.0.0.0` |
+| `--udp-port-range <range>` | 将 UDP 中继套接字绑定到闭区间端口范围(如 `40000-40100`) | OS 临时端口 |
+| `--udp-advertise <ip>` | NAT/Docker 后通告的 BND IP(客户端可达地址) | 绑定地址 |
 | `--version <tag>` | 发布版本,如 `v0.1.0` | `latest` |
 | `--bin-dir <dir>` | 二进制安装目录(binary 方式) | `/usr/local/bin` |
 | `--dir <dir>` | Docker 部署目录(docker 方式) | `./next-socks5-deploy` |
