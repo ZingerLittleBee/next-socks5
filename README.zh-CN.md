@@ -76,6 +76,9 @@ curl -fsSL https://raw.githubusercontent.com/ZingerLittleBee/next-socks5/main/in
 # 绑定到单个网卡而非 0.0.0.0(此处:仅本机)
 ./install.sh --no-auth --listen 127.0.0.1 --port 1080
 
+# NAT/Docker 后的 UDP 中继:固定中继端口范围并通告公网 IP
+./install.sh --port 1080 --udp-port-range 40000-40100 --udp-advertise 203.0.113.42
+
 # 固定某个发布版本,而非 `latest`
 ./install.sh --version v0.2.0 --port 1080
 
@@ -94,6 +97,8 @@ curl -fsSL https://raw.githubusercontent.com/ZingerLittleBee/next-socks5/main/in
 | `--user` / `--pass` | 认证模式的凭证(省略则随机) | 随机 |
 | `--port <port>` | 监听端口(省略则随机选空闲端口) | 随机 |
 | `--listen <addr>` | 绑定地址 | `0.0.0.0` |
+| `--udp-port-range <range>` | 将 UDP 中继套接字绑定到闭区间端口范围(如 `40000-40100`) | OS 临时端口 |
+| `--udp-advertise <ip>` | NAT/Docker 后通告的 BND IP(客户端可达地址) | 绑定地址 |
 | `--version <tag>` | 发布版本,如 `v0.1.0` | `latest` |
 | `--bin-dir <dir>` | 二进制安装目录(binary 方式) | `/usr/local/bin` |
 | `--dir <dir>` | Docker 部署目录(docker 方式) | `./next-socks5-deploy` |
@@ -261,6 +266,9 @@ enabled = true             # 本地 attach 端点(默认开启)
 port_range = "40000-40100"   # 将 UDP 中继套接字绑定到此闭区间范围
 advertise  = "203.0.113.42"  # 通告的 BND IP(客户端可达的地址)
 ```
+
+> `install.sh --udp-port-range 40000-40100 --udp-advertise 203.0.113.42` 会为你
+> 生成这段 `[udp]` 配置。
 
 - **`port_range`** —— 将每个关联的 UDP 套接字绑定到已知范围内,而非随机的临时端口,这样防火墙/NAT 只需开放该范围即可。每个关联会绑定各自的套接字,因此范围大小应 **≥ 预期的并发 UDP 客户端数量**;`"40000-40000"` 只有一个端口,会导致 UDP 串行化。当范围耗尽时,UDP ASSOCIATE 会返回通用失败(general failure)应答。
 - **`advertise`** —— 写入 UDP ASSOCIATE 应答中的 IP。默认情况下,服务器会通告客户端 TCP 连接抵达时所用的服务器侧 IP(即控制套接字的本地地址);当该 IP 对客户端不可达时(例如服务器位于 NAT 之后,或使用 Docker 桥接网络),请覆盖此项。通告的**端口始终是真实绑定的端口**,因此任何 NAT/转发都必须**端口保持一致(1:1)**。通告地址不可达是「TCP 可用但 UDP 不可用」的头号原因。可接受裸 IP 或 `ip:port` 格式(端口会被忽略);格式错误的值会在启动时被拒绝,而不会被静默忽略。
