@@ -5,7 +5,7 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.4.0] - 2026-06-05
+## [0.4.0] - 2026-06-06
 
 ### Added
 
@@ -28,6 +28,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   being silently ignored at runtime. No backward-compatible alias is kept: a
   top-level `public_addr` key in an existing config is silently ignored, so
   migrate it to `[udp].advertise` before upgrading.
+
+### Fixed
+
+- `install.sh`: the generated Docker Compose now mounts a writable `tmpfs` for
+  `/run/next-socks5`, so the admin/attach socket is no longer silently disabled
+  under the unprivileged container user (`docker exec ... next-socks5 attach` now
+  works). The installer also verifies the container/service actually started
+  (catching a crash-loop from a port clash) instead of reporting a false success.
 
 ## [0.3.2] - 2026-06-05
 
