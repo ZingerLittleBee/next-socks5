@@ -33,7 +33,7 @@ Three swappable concerns: pure protocol codecs, an async concurrent server core,
   - `admission.rs` — admission control **at accept time** (before handshake) so pre-auth floods can't bypass `max_connections` / `max_per_ip`. Holds a `Permit` for the connection's lifetime.
   - `connection.rs` — per-connection state machine: greeting → auth → request, all bounded by a **single `handshake_ms` deadline** (anti-slowloris). Pipelined post-request bytes are passed to the relay as `initial`.
   - `connect.rs` — CONNECT: resolve → egress check → dial (timeout-bounded) → success reply with BND → bidirectional relay with idle timeout + per-byte metrics.
-  - `udp.rs` — UDP ASSOCIATE: bind ephemeral socket, advertise a **client-reachable BND address** (control stream's local addr, else `public_addr`), relay loop tied to control-connection lifetime, with idle timeout, per-association rate cap, and LRU target cap.
+  - `udp.rs` — UDP ASSOCIATE: bind ephemeral socket, advertise a **client-reachable BND address** (control stream's local addr, else `udp.advertise`), relay loop tied to control-connection lifetime, with idle timeout, per-association rate cap, and LRU target cap.
 - **`src/config.rs`** — `Config`/`Cli`/`Command`, TOML+CLI merge, and the **egress filter** (SSRF guard: blocks loopback/link-local/private/CGNAT by default — `[egress]`).
 - **`src/auth.rs`** — constant-time credential verification (no timing side-channels).
 - **`src/metrics.rs`** — atomic counters (hot path, per-byte) + Mutex-guarded connection registry (cold path, per open/close) + serializable snapshot/event types. `format_event()` is the single source of human-readable event text for both TUI and headless modes.

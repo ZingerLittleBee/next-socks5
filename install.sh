@@ -154,6 +154,10 @@ render_config() {
   echo "connect_ms = 10000"
   echo "tcp_idle_ms = 300000"
   echo "udp_idle_ms = 60000"
+  echo ""
+  echo "[udp]"
+  echo "# port_range = \"40000-40100\"      # bind UDP relay sockets to this range"
+  echo "# advertise = \"YOUR_PUBLIC_IP\"    # advertised BND IP for clients behind NAT"
 }
 
 # Resolve the public IP via api.ipify.org (used for the shown proxy URL).
@@ -362,6 +366,14 @@ services:
     # Host networking so SOCKS5 UDP ASSOCIATE works (the relay advertises a
     # client-reachable BND address). Linux only.
     network_mode: host
+    # Alternative — bridge networking (e.g. Docker Desktop, where host mode is
+    # limited): comment out network_mode above, publish the TCP control port plus
+    # the configured UDP range (short syntax; long syntax has no range support),
+    # and set [udp].advertise in config.toml to the host's public IP. Keep the UDP
+    # range identical on both sides (port-preserving).
+    #ports:
+    #  - "${PORT}:${PORT}/tcp"
+    #  - "40000-40100:40000-40100/udp"
     volumes:
       - ./config.toml:/etc/next-socks5/config.toml:ro
     # Writable runtime dir for the admin/attach Unix socket. The image runs as an

@@ -5,6 +5,27 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.0] - 2026-06-05
+
+### Added
+
+- `[udp].port_range` config option (e.g. `port_range = "40000-40100"`) to bind
+  each UDP association's relay socket inside an inclusive port range instead of an
+  OS-assigned ephemeral port — useful behind firewalls/NAT that only forward a
+  known range. When the range is exhausted, UDP ASSOCIATE returns a general
+  failure reply instead of silently dropping the request.
+
+### Changed
+
+- UDP ASSOCIATE now binds the relay socket on the TCP control connection's local
+  IP and advertises a separate address, decoupling bind from advertise. The former
+  top-level `public_addr` option is renamed to `[udp].advertise` and is now
+  advertise-only (it no longer affects which IP the socket binds), so a server
+  behind NAT/Docker can advertise a client-reachable public IP while binding a
+  local one. The advertised port is always the real bound port. No
+  backward-compatible alias is kept: a top-level `public_addr` key in an existing
+  config is silently ignored, so migrate it to `[udp].advertise` before upgrading.
+
 ## [0.3.2] - 2026-06-05
 
 The project moved to its own repository and now re-publishes its release
