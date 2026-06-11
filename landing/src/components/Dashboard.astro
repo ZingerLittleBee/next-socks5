@@ -1,0 +1,170 @@
+---
+// Faithful recreation of the live `--mock` ratatui TUI dashboard.
+// Connection rows use the real log-line / table layout from the tool.
+const conns = [
+  { id: '14', src: '10.0.42.13:54012', tgt: 'example.com:443', kind: 'CONNECT', kc: '#46E08A', up: '3.40 MB', down: '82.11 MB', age: '2m' },
+  { id: '15', src: '10.0.118.7:51199', tgt: 'github.com:443', kind: 'CONNECT', kc: '#46E08A', up: '1.20 MB', down: '44.50 MB', age: '1m' },
+  { id: '16', src: '10.0.7.221:60233', tgt: 'api.ipify.org:443', kind: 'CONNECT', kc: '#46E08A', up: '64.00 KB', down: '12.30 KB', age: '58s' },
+  { id: '17', src: '10.0.201.5:49888', tgt: 'cdn.example.net:80', kind: 'UDP', kc: '#38D6D6', up: '220.00 KB', down: '5.10 MB', age: '47s' },
+  { id: '18', src: '10.0.66.90:52741', tgt: 'speed.example.com:443', kind: 'CONNECT', kc: '#46E08A', up: '8.90 MB', down: '402.50 MB', age: '41s' },
+  { id: '19', src: '10.0.5.34:55010', tgt: 'db.internal:5432', kind: 'CONNECT', kc: '#46E08A', up: '120.00 KB', down: '640.00 KB', age: '12s' },
+  { id: '20', src: '10.0.150.2:58820', tgt: 'example.com:443', kind: 'UDP', kc: '#38D6D6', up: '44.00 KB', down: '18.70 KB', age: '4s' },
+];
+---
+
+<section id="dashboard" style="max-width:1180px; margin:0 auto; padding:64px 28px 24px;">
+  <div
+    style="display:flex; align-items:flex-end; justify-content:space-between; gap:30px; flex-wrap:wrap; margin-bottom:22px;"
+  >
+    <div style="flex:1 1 320px;">
+      <div style="color:#46E08A; font-size:12.5px; letter-spacing:1.5px; margin-bottom:8px;">// THE DASHBOARD</div>
+      <h2 style="margin:0; font-size:32px; font-weight:700; color:#E8F0EC; letter-spacing:-0.5px;">
+        Watch every byte, live.
+      </h2>
+    </div>
+    <p style="margin:0; flex:0 1 430px; color:#8C9A95; font-size:14px; line-height:1.6; text-wrap:pretty;">
+      A real-time terminal UI built on ratatui — throughput trend, success/error stats, a sortable
+      connection table and a scrolling log. Attach to a running headless server over a local socket.
+    </p>
+  </div>
+
+  <!-- terminal window -->
+  <div
+    style="border:1px solid #283330; background:#0A0F0D; box-shadow:0 30px 80px -30px rgba(0,0,0,0.8); position:relative; overflow:hidden;"
+  >
+    <!-- window chrome -->
+    <div
+      style="display:flex; align-items:center; gap:10px; padding:9px 14px; background:#0C110F; border-bottom:1px solid #1A2421;"
+    >
+      <span style="width:11px; height:11px; border-radius:50%; background:#FF6B5B;"></span>
+      <span style="width:11px; height:11px; border-radius:50%; background:#E8B84B;"></span>
+      <span style="width:11px; height:11px; border-radius:50%; background:#46E08A;"></span>
+      <span style="margin:0 auto; color:#52605B; font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;"
+        >next-socks5 serve --listen 0.0.0.0:1080 --mock</span
+      >
+    </div>
+
+    <div style="padding:0; font-size:13px; line-height:1.5;">
+      <!-- ratatui title/status line (black on cyan) -->
+      <div
+        style="background:#38D6D6; color:#06100F; font-weight:700; padding:3px 10px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;"
+      >
+        next-socks5&nbsp;&nbsp;-&nbsp;&nbsp;0.0.0.0:1080&nbsp;&nbsp;-&nbsp;&nbsp;up 0:14:32&nbsp;&nbsp;-&nbsp;&nbsp;active
+        7&nbsp;&nbsp;-&nbsp;&nbsp;tab:focus s:sort ↑↓/jk:scroll q:quit
+      </div>
+
+      <div style="padding:13px;">
+        <!-- INFO BAND -->
+        <div class="ns5-dash-info" style="display:grid; grid-template-columns:37fr 63fr; gap:11px; margin-bottom:11px;">
+          <!-- left column: throughput over stats -->
+          <div style="display:flex; flex-direction:column; gap:11px;">
+            <!-- throughput -->
+            <div style="position:relative; border:1px solid #283330; padding:11px 13px 10px;">
+              <span style="position:absolute; top:-8px; left:11px; background:#0A0F0D; padding:0 6px; color:#8C9A95; font-size:12px;">Throughput</span>
+              <div style="white-space:pre; color:#CBD6D0;">Up:    <span style="color:#46E08A;">  245.3</span> KB/s  total <span style="color:#9BA8A2;">1.82 GB</span></div>
+              <div style="white-space:pre; color:#CBD6D0;">Down:  <span style="color:#38D6D6;"> 1788.5</span> KB/s  total <span style="color:#9BA8A2;">14.21 GB</span></div>
+              <div style="white-space:pre; color:#5A6663;">peak  ↑512 ↓2048 KB/s</div>
+            </div>
+            <!-- stats -->
+            <div style="position:relative; border:1px solid #283330; padding:11px 13px 10px; flex:1;">
+              <span style="position:absolute; top:-8px; left:11px; background:#0A0F0D; padding:0 6px; color:#8C9A95; font-size:12px;">Stats</span>
+              <div style="white-space:pre; color:#CBD6D0;">conns total=<span style="color:#E8F0EC;">1283</span>  active=<span style="color:#E8F0EC;">7</span>  ok=<span style="color:#46E08A;">1271</span>  fail=<span style="color:#E8B84B;">12</span>  (<span style="color:#46E08A;">99.1%</span>)</div>
+              <div style="white-space:pre; margin-top:3px;"><span style="color:#E8B84B;">0x01 general=2</span>   <span style="color:#5A6663;">0x02 ruleset=0</span>   <span style="color:#E8B84B;">0x03 netunreach=1</span></div>
+              <div style="white-space:pre;"><span style="color:#E8B84B;">0x04 hostunreach=3</span>   <span style="color:#E8B84B;">0x05 connrefused=5</span>   <span style="color:#5A6663;">0x06 ttl=0</span></div>
+              <div style="white-space:pre;"><span style="color:#E8B84B;">0x07 badcmd=1</span>   <span style="color:#5A6663;">0x08 badatyp=0</span></div>
+              <div style="white-space:pre; color:#E8B84B; margin-top:3px;">top error  0x05 connrefused =5 of 12 failures</div>
+            </div>
+          </div>
+
+          <!-- trend chart -->
+          <div style="position:relative; border:1px solid #283330; padding:11px 13px 8px;">
+            <span style="position:absolute; top:-8px; left:11px; background:#0A0F0D; padding:0 6px; color:#8C9A95; font-size:12px;">Trend (30s)</span>
+            <span style="position:absolute; top:-8px; right:13px; background:#0A0F0D; padding:0 6px; font-size:12px;"><span style="color:#46E08A;">↑ up</span>&nbsp;&nbsp;<span style="color:#38D6D6;">↓ down</span></span>
+            <div style="display:flex; gap:8px;">
+              <div style="display:flex; flex-direction:column; justify-content:space-between; align-items:flex-end; font-size:11px; color:#5A6663; padding:2px 0 16px; min-width:54px;">
+                <span>2.0 MB/s</span><span>1.0 MB/s</span><span>&nbsp;</span>
+              </div>
+              <div style="flex:1; min-width:0;">
+                <svg viewBox="0 0 680 150" preserveAspectRatio="none" style="width:100%; height:152px; display:block;">
+                  <line x1="0" y1="38" x2="680" y2="38" stroke="#1A2421" stroke-width="1" stroke-dasharray="2 5"></line>
+                  <line x1="0" y1="94" x2="680" y2="94" stroke="#1A2421" stroke-width="1" stroke-dasharray="2 5"></line>
+                  <line x1="0" y1="149" x2="680" y2="149" stroke="#1A2421" stroke-width="1"></line>
+                  <polygon points="0,128 30,120 60,126 90,112 120,108 150,118 180,110 210,102 240,114 270,122 300,109 330,100 360,107 390,119 420,111 450,98 480,112 510,121 540,108 570,103 600,114 630,109 660,104 680,107 680,150 0,150" fill="rgba(70,224,138,0.08)"></polygon>
+                  <polyline points="0,128 30,120 60,126 90,112 120,108 150,118 180,110 210,102 240,114 270,122 300,109 330,100 360,107 390,119 420,111 450,98 480,112 510,121 540,108 570,103 600,114 630,109 660,104 680,107" fill="none" stroke="#46E08A" stroke-width="1.7"></polyline>
+                  <polygon points="0,95 30,70 60,82 90,55 120,40 150,62 180,48 210,30 240,52 270,68 300,45 330,28 360,38 390,58 420,42 450,25 480,46 510,60 540,38 570,30 600,50 630,42 660,34 680,40 680,150 0,150" fill="rgba(56,214,214,0.07)"></polygon>
+                  <polyline points="0,95 30,70 60,82 90,55 120,40 150,62 180,48 210,30 240,52 270,68 300,45 330,28 360,38 390,58 420,42 450,25 480,46 510,60 540,38 570,30 600,50 630,42 660,34 680,40" fill="none" stroke="#38D6D6" stroke-width="1.7"></polyline>
+                  <line x1="679" y1="0" x2="679" y2="150" stroke="#33403B" stroke-width="1" stroke-dasharray="3 3"></line>
+                  <circle cx="680" cy="107" r="2.6" fill="#46E08A"></circle>
+                  <circle cx="680" cy="40" r="2.6" fill="#38D6D6"></circle>
+                </svg>
+                <div style="display:flex; justify-content:space-between; font-size:11px; color:#5A6663; padding-top:2px;">
+                  <span>-30s</span><span>-15s</span><span>now</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- MAIN ROW: connections | log -->
+        <div class="ns5-dash-main" style="display:grid; grid-template-columns:62fr 38fr; gap:11px;">
+          <!-- connections (focused) -->
+          <div style="position:relative; border:1px solid #38D6D6; padding:11px 12px 10px;">
+            <span style="position:absolute; top:-8px; left:11px; background:#0A0F0D; padding:0 6px; color:#38D6D6; font-weight:700; font-size:12px;">Active connections (7)  sort:ID</span>
+            <table style="width:100%; border-collapse:collapse; font-size:12.5px; white-space:nowrap;">
+              <thead>
+                <tr style="color:#E8F0EC; font-weight:700; text-align:left;">
+                  <th style="padding:2px 8px 6px 0; font-weight:700;">ID</th>
+                  <th style="padding:2px 8px 6px 0; font-weight:700;">Source</th>
+                  <th style="padding:2px 8px 6px 0; font-weight:700;">Target</th>
+                  <th style="padding:2px 8px 6px 0; font-weight:700;">Kind</th>
+                  <th style="padding:2px 8px 6px 0; font-weight:700; text-align:right;">Up</th>
+                  <th style="padding:2px 8px 6px 0; font-weight:700; text-align:right;">Down</th>
+                  <th style="padding:2px 0 6px 0; font-weight:700; text-align:right;">Age</th>
+                </tr>
+              </thead>
+              <tbody style="color:#A9B5AF;">
+                {
+                  conns.map((c) => (
+                    <tr>
+                      <td style="padding:1.5px 8px 1.5px 0;">{c.id}</td>
+                      <td style="padding:1.5px 8px 1.5px 0;">{c.src}</td>
+                      <td style="padding:1.5px 8px 1.5px 0; color:#CBD6D0;">{c.tgt}</td>
+                      <td style={`padding:1.5px 8px 1.5px 0; color:${c.kc};`}>{c.kind}</td>
+                      <td style="padding:1.5px 8px 1.5px 0; text-align:right;">{c.up}</td>
+                      <td style="padding:1.5px 8px 1.5px 0; text-align:right;">{c.down}</td>
+                      <td style="padding:1.5px 0; text-align:right; color:#7C8884;">{c.age}</td>
+                    </tr>
+                  ))
+                }
+              </tbody>
+            </table>
+          </div>
+
+          <!-- log -->
+          <div style="position:relative; border:1px solid #283330; padding:11px 12px 10px;">
+            <span style="position:absolute; top:-8px; left:11px; background:#0A0F0D; padding:0 6px; color:#8C9A95; font-size:12px;">Log (1283)  ↑1271 ↓0</span>
+            <div style="font-size:12.5px; line-height:1.62; white-space:nowrap; overflow:hidden;">
+              <div style="color:#7C8884;">mock data generator running</div>
+              <div style="color:#A9B5AF;">[#14] CONNECT open 10.0.42.13:54012 -&gt; example.com:443</div>
+              <div style="color:#A9B5AF;">auth ok for 'alice'</div>
+              <div style="color:#5A6663;">[#11] CONNECT open 10.0.9.2:50122 -&gt; github.com:443  closed</div>
+              <div style="color:#E8B84B;">auth failed (denied) for 'bob'</div>
+              <div style="color:#A9B5AF;">[#15] CONNECT open 10.0.118.7:51199 -&gt; github.com:443</div>
+              <div style="color:#FF6B5B;">error 0x05: connection refused</div>
+              <div style="color:#A9B5AF;">[#17] UDP open 10.0.201.5:49888 -&gt; cdn.example.net:80</div>
+              <div style="color:#FF6B5B;">error 0x03: network unreachable</div>
+              <div style="color:#A9B5AF;">[#18] CONNECT open 10.0.66.90:52741 -&gt; speed.example.com:443</div>
+              <div style="color:#A9B5AF;">auth ok for 'carol'</div>
+              <div style="color:#A9B5AF;">[#19] CONNECT open 10.0.5.34:55010 -&gt; db.internal:5432</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <p style="margin:14px 2px 0; font-size:12.5px; color:#5C6863;">
+    Run the dashboard with <span style="color:#8C9A95;">next-socks5 serve</span>, preview it with
+    synthetic traffic via <span style="color:#8C9A95;">--mock</span>, or
+    <span style="color:#8C9A95;">attach</span> to a running headless server over its local socket.
+  </p>
+</section>

@@ -1,0 +1,32 @@
+---
+// Brand mark — Lucide "plug-zap" (plug + lightning), a dark stroke inside the
+// green brand chip. Thematically perfect for a proxy that links connections.
+interface Props {
+  size?: number;
+  icon?: number;
+}
+const { size = 28, icon = 17 } = Astro.props;
+---
+
+<span
+  class="ns5-logo"
+  style={`display:inline-flex; align-items:center; justify-content:center; width:${size}px; height:${size}px; background:#46E08A;`}
+>
+  <svg
+    width={icon}
+    height={icon}
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="#07100C"
+    stroke-width="2.2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    aria-hidden="true"
+  >
+    <path d="M6.3 20.3a2.4 2.4 0 0 0 3.4 0L12 18l-6-6-2.3 2.3a2.4 2.4 0 0 0 0 3.4Z"></path>
+    <path d="m2 22 3-3"></path>
+    <path d="M7.5 13.5 10 11"></path>
+    <path d="M10.5 16.5 13 14"></path>
+    <path d="m18 3-4 4h6l-4 4"></path>
+  </svg>
+</span>

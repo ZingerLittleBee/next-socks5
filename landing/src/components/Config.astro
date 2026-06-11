@@ -1,0 +1,46 @@
+<section id="config" style="max-width:1180px; margin:0 auto; padding:56px 28px 24px;">
+  <div class="ns5-config-grid" style="display:grid; grid-template-columns:1fr 1.15fr; gap:34px; align-items:center;">
+    <div>
+      <div style="color:#46E08A; font-size:12.5px; letter-spacing:1.5px; margin-bottom:8px;">// CONFIG</div>
+      <h2 style="margin:0 0 16px; font-size:32px; font-weight:700; color:#E8F0EC; letter-spacing:-0.5px;">
+        One TOML file. CLI overrides.
+      </h2>
+      <p style="margin:0 0 18px; color:#8C9A95; font-size:14.5px; line-height:1.65; text-wrap:pretty;">
+        Everything lives in a single config: listen address, auth users, timeouts, connection limits,
+        UDP relay and egress policy. Any flag on the command line wins over the file.
+      </p>
+      <ul style="margin:0; padding:0; list-style:none; display:flex; flex-direction:column; gap:11px; font-size:13.5px; color:#A9B5AF;">
+        <li style="display:flex; gap:10px;"><span style="color:#46E08A;">▸</span> Add a <span style="color:#CBD6D0;">[[auth.users]]</span> block per credential</li>
+        <li style="display:flex; gap:10px;"><span style="color:#46E08A;">▸</span> Anti-slowloris handshake deadline built in</li>
+        <li style="display:flex; gap:10px;"><span style="color:#46E08A;">▸</span> Egress classes secure-by-default, opt out per class</li>
+        <li style="display:flex; gap:10px;"><span style="color:#46E08A;">▸</span> Malformed values are rejected at startup, not ignored</li>
+      </ul>
+    </div>
+
+    <div style="border:1px solid #283330; background:#0A0F0D;">
+      <div style="display:flex; align-items:center; gap:9px; padding:9px 14px; border-bottom:1px solid #1A2421;">
+        <span style="width:10px; height:10px; border-radius:50%; background:#33403B;"></span>
+        <span style="width:10px; height:10px; border-radius:50%; background:#33403B;"></span>
+        <span style="width:10px; height:10px; border-radius:50%; background:#33403B;"></span>
+        <span style="margin-left:6px; color:#52605B; font-size:12px;">config.toml</span>
+      </div>
+      <div style="padding:16px 18px; font-size:13px; line-height:1.72; overflow-x:auto;">
+        <div style="white-space:pre;"><span style="color:#7BC79B;">listen</span> = <span style="color:#E8B84B;">"0.0.0.0:1080"</span></div>
+        <div style="white-space:pre;">&nbsp;</div>
+        <div style="white-space:pre;">[<span style="color:#38D6D6;">auth</span>]</div>
+        <div style="white-space:pre;"><span style="color:#7BC79B;">method</span> = <span style="color:#E8B84B;">"password"</span></div>
+        <div style="white-space:pre;">[[<span style="color:#38D6D6;">auth.users</span>]]</div>
+        <div style="white-space:pre;"><span style="color:#7BC79B;">username</span> = <span style="color:#E8B84B;">"alice"</span></div>
+        <div style="white-space:pre;"><span style="color:#7BC79B;">password</span> = <span style="color:#E8B84B;">"secret"</span></div>
+        <div style="white-space:pre;">&nbsp;</div>
+        <div style="white-space:pre;">[<span style="color:#38D6D6;">limits</span>]</div>
+        <div style="white-space:pre;"><span style="color:#7BC79B;">max_connections</span> = <span style="color:#46E08A;">2048</span></div>
+        <div style="white-space:pre;"><span style="color:#7BC79B;">max_per_ip</span>     = <span style="color:#46E08A;">64</span></div>
+        <div style="white-space:pre;">&nbsp;</div>
+        <div style="white-space:pre;">[<span style="color:#38D6D6;">egress</span>]  <span style="color:#5A6663;"># SSRF guard, all blocked</span></div>
+        <div style="white-space:pre;"><span style="color:#7BC79B;">block_loopback</span>   = <span style="color:#46E08A;">true</span></div>
+        <div style="white-space:pre;"><span style="color:#7BC79B;">block_private</span>    = <span style="color:#46E08A;">true</span></div>
+      </div>
+    </div>
+  </div>
+</section>

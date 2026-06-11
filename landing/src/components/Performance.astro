@@ -1,0 +1,39 @@
+---
+const cells = [
+  { value: '~2 GB/s', label: 'sustained relay throughput', color: '#46E08A' },
+  { value: '~1.6 ms', label: 'added per-request latency', color: '#38D6D6' },
+  { value: '~6k/s', label: 'new connections per second', color: '#E8F0EC' },
+  { value: '3.5 MB', label: 'scratch container image', color: '#E8F0EC' },
+];
+---
+
+<section id="performance" style="max-width:1180px; margin:0 auto; padding:56px 28px 24px;">
+  <div style="border:1px solid #283330; background:linear-gradient(180deg, #0C110F, #0A0F0D); padding:40px 34px;">
+    <div class="ns5-perf-grid" style="display:grid; grid-template-columns:1fr 1.4fr; gap:38px; align-items:center;">
+      <div>
+        <div style="color:#46E08A; font-size:12.5px; letter-spacing:1.5px; margin-bottom:8px;">// PERFORMANCE</div>
+        <h2 style="margin:0 0 14px; font-size:30px; font-weight:700; color:#E8F0EC; letter-spacing:-0.5px;">
+          The proxy isn't the bottleneck.
+        </h2>
+        <p style="margin:0; color:#8C9A95; font-size:14px; line-height:1.65; text-wrap:pretty;">
+          On a single 4-core cloud VM over loopback, profiling shows next-socks5 is
+          kernel/network-bound with no lock contention. Full methodology and a reproducible harness
+          ship in the repo.
+        </p>
+      </div>
+      <div
+        class="ns5-perf-stats"
+        style="display:grid; grid-template-columns:repeat(2, 1fr); gap:1px; background:#1A2421; border:1px solid #1A2421;"
+      >
+        {
+          cells.map((c) => (
+            <div style="background:#0A0F0D; padding:22px 20px;">
+              <div style={`font-size:34px; font-weight:700; color:${c.color};`}>{c.value}</div>
+              <div style="font-size:12.5px; color:#6A7672; margin-top:5px;">{c.label}</div>
+            </div>
+          ))
+        }
+      </div>
+    </div>
+  </div>
+</section>

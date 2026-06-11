@@ -1,0 +1,160 @@
+/* ============================================================
+   next-socks5 landing — global styles
+   Terminal / ratatui-inspired aesthetic. Faithful to the design
+   prototype: IBM Plex Mono, near-black green-tinted background,
+   sharp-cornered panels with titles cut into the top border.
+   Hover behaviours that the prototype expressed via `style-hover`
+   are reproduced here as real `:hover` rules.
+   ============================================================ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: #070b0a;
+}
+
+body {
+  color: #cbd6d0;
+  font-family: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 15px;
+  line-height: 1.55;
+  min-height: 100%;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+::selection {
+  background: #46e08a;
+  color: #07100c;
+}
+
+a {
+  color: inherit;
+}
+
+/* --- keyframes ----------------------------------------------------------- */
+@keyframes ns5-blink {
+  0%,
+  49% {
+    opacity: 1;
+  }
+  50%,
+  100% {
+    opacity: 0;
+  }
+}
+
+@keyframes ns5-scan {
+  0% {
+    transform: translateY(-100%);
+  }
+  100% {
+    transform: translateY(100%);
+  }
+}
+
+/* --- blinking terminal cursor -------------------------------------------- */
+.ns5-cursor {
+  display: inline-block;
+  width: 8px;
+  height: 15px;
+  background: #46e08a;
+  margin-left: 6px;
+  vertical-align: -2px;
+  animation: ns5-blink 1.1s steps(1) infinite;
+}
+
+/* --- prompt symbol: not selectable so copying skips the "$ " ------------- */
+.ns5-prompt {
+  color: #52605b;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* --- hover utilities (were `style-hover` in the prototype) --------------- */
+
+/* nav + footer text links: dim → brand green on hover */
+.ns5-link {
+  text-decoration: none;
+  transition: color 0.15s ease;
+}
+.ns5-link:hover {
+  color: #46e08a;
+}
+
+/* solid green button: brighten on hover */
+.ns5-btn-solid {
+  transition: background 0.15s ease;
+}
+.ns5-btn-solid:hover {
+  background: #5ef29b;
+}
+
+/* ghost / outline button: border + text go green on hover */
+.ns5-btn-ghost {
+  transition:
+    border-color 0.15s ease,
+    color 0.15s ease;
+}
+.ns5-btn-ghost:hover {
+  border-color: #46e08a;
+  color: #46e08a;
+}
+
+/* feature card: border lifts on hover */
+.ns5-card {
+  transition: border-color 0.15s ease;
+}
+.ns5-card:hover {
+  border-color: #33403b;
+}
+
+/* copy button: subtle green wash on hover */
+.ns5-copy-btn {
+  transition: background 0.15s ease;
+}
+.ns5-copy-btn:hover {
+  background: rgba(70, 224, 138, 0.12);
+}
+
+/* --- responsive ---------------------------------------------------------- */
+/* The prototype is desktop-first; collapse the multi-column grids so the
+   page stays legible on tablets and phones. */
+@media (max-width: 880px) {
+  .ns5-hero-grid,
+  .ns5-config-grid,
+  .ns5-perf-grid {
+    grid-template-columns: 1fr !important;
+  }
+  .ns5-features-grid {
+    grid-template-columns: repeat(2, 1fr) !important;
+  }
+  .ns5-dash-info,
+  .ns5-dash-main {
+    grid-template-columns: 1fr !important;
+  }
+  .ns5-nav-links {
+    gap: 16px !important;
+  }
+}
+
+@media (max-width: 600px) {
+  .ns5-features-grid,
+  .ns5-install-grid,
+  .ns5-perf-stats {
+    grid-template-columns: 1fr !important;
+  }
+  .ns5-h1 {
+    font-size: 40px !important;
+  }
+  .ns5-nav-links a:not(.ns5-star) {
+    display: none;
+  }
+}
