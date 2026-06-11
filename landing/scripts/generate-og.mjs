@@ -78,7 +78,7 @@ function buildSvg(version) {
     points="812,118 852,110 892,114 932,102 972,108 1012,96 1052,104 1092,90 1128,98"/>
 
   <!-- brand lockup -->
-  <rect x="72" y="64" width="54" height="54" fill="#46E08A"/>
+  <rect x="72" y="64" width="54" height="54" rx="11" ry="11" fill="#46E08A"/>
   ${plugZap(85, 77, 1.2)}
   <text x="142" y="101" font-family="${mono}" font-size="30" font-weight="700"
     letter-spacing="0.5" fill="#E8F0EC">next-socks5</text>

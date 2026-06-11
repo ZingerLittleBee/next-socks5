@@ -6,11 +6,14 @@ interface Props {
   icon?: number;
 }
 const { size = 28, icon = 17 } = Astro.props;
+// Subtle rounding (~21% of the chip size) — softens the mark without losing
+// the sharp terminal feel.
+const radius = Math.round(size * 0.21);
 ---
 
 <span
   class="ns5-logo"
-  style={`display:inline-flex; align-items:center; justify-content:center; width:${size}px; height:${size}px; background:#46E08A;`}
+  style={`display:inline-flex; align-items:center; justify-content:center; width:${size}px; height:${size}px; background:#46E08A; border-radius:${radius}px;`}
 >
   <svg
     width={icon}
