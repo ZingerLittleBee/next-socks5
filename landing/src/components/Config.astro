@@ -37,8 +37,9 @@
         <div style="white-space:pre;"><span style="color:#7BC79B;">max_connections</span> = <span style="color:#46E08A;">2048</span></div>
         <div style="white-space:pre;"><span style="color:#7BC79B;">max_per_ip</span>     = <span style="color:#46E08A;">64</span></div>
         <div style="white-space:pre;">&nbsp;</div>
-        <div style="white-space:pre;">[<span style="color:#38D6D6;">egress</span>]  <span style="color:#5A6663;"># SSRF guard, all blocked</span></div>
+        <div style="white-space:pre;">[<span style="color:#38D6D6;">egress</span>]  <span style="color:#5A6663;"># SSRF guard, on by default</span></div>
         <div style="white-space:pre;"><span style="color:#7BC79B;">block_loopback</span>   = <span style="color:#46E08A;">true</span></div>
+        <div style="white-space:pre;"><span style="color:#7BC79B;">block_link_local</span> = <span style="color:#46E08A;">true</span></div>
         <div style="white-space:pre;"><span style="color:#7BC79B;">block_private</span>    = <span style="color:#46E08A;">true</span></div>
       </div>
     </div>
