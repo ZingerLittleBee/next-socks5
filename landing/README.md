@@ -1,7 +1,8 @@
 # next-socks5 — landing page
 
 Marketing landing page for [next-socks5](https://github.com/ZingerLittleBee/next-socks5),
-built with [Astro](https://astro.build) as a fully static site.
+built with [Astro](https://astro.build) as a fully static site. Managed with
+[Bun](https://bun.sh).
 
 Terminal / ratatui-inspired aesthetic: IBM Plex Mono, a near-black green-tinted
 palette, and sharp-cornered panels with titles cut into the top border. The hero
@@ -11,15 +12,16 @@ showcases a faithful recreation of the live `--mock` TUI dashboard.
 
 ```bash
 cd landing
-npm install
-npm run dev      # http://localhost:4321
+bun install
+bun run dev      # http://localhost:4321
 ```
 
 ## Build
 
 ```bash
-npm run build    # outputs static files to dist/
-npm run preview  # serve the production build locally
+bun run build    # outputs static files to dist/
+bun run preview  # serve the production build locally
+bun run og       # regenerate public/og.png (social preview)
 ```
 
 ## Structure
