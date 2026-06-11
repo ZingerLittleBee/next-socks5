@@ -1,7 +1,7 @@
 ---
 import Logo from './Logo.astro';
+import { REPO, VERSION } from '../consts';
 
-const REPO = 'https://github.com/ZingerLittleBee/next-socks5';
 const links = [
   { href: '#dashboard', label: 'Dashboard' },
   { href: '#features', label: 'Features' },
@@ -20,7 +20,7 @@ const links = [
       >next-socks5</span
     >
     <span style="color:#6FB78F; font-size:12px; padding:2px 7px; border:1px solid #2E4034; margin-left:4px;"
-      >v0.2.0</span
+      >v{VERSION}</span
     >
   </div>
   <div class="ns5-nav-links" style="display:flex; align-items:center; gap:26px; font-size:13.5px;">
