@@ -1,0 +1,10 @@
+{
+  // Cloudflare Workers static-assets deployment for the next-socks5 landing page.
+  // Build with `bun run build`, then `bunx wrangler deploy` to upload `dist/`.
+  "name": "next-socks5",
+  "account_id": "de2e9f09d07e776ffbfbe1f9e8c76961",
+  "compatibility_date": "2025-06-11",
+  "assets": {
+    "directory": "./dist"
+  }
+}
