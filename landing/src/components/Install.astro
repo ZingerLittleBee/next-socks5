@@ -1,0 +1,77 @@
+---
+// Install commands kept faithful to the project README / install.sh.
+---
+
+<section id="install" style="max-width:1180px; margin:0 auto; padding:56px 28px 24px;">
+  <div style="color:#46E08A; font-size:12.5px; letter-spacing:1.5px; margin-bottom:8px;">// INSTALL</div>
+  <h2 style="margin:0 0 12px; font-size:32px; font-weight:700; color:#E8F0EC; letter-spacing:-0.5px;">
+    Four ways in. Pick one.
+  </h2>
+  <p style="margin:0 0 28px; color:#8C9A95; font-size:14px; max-width:600px;">
+    Targets Linux (musl x86_64 / aarch64). The installer sets up a systemd or OpenRC service automatically.
+  </p>
+
+  <div class="ns5-install-grid" style="display:grid; grid-template-columns:repeat(2, 1fr); gap:13px;">
+    <!-- One-line installer -->
+    <div style="border:1px solid #283330; background:#0A0F0D;">
+      <div style="display:flex; align-items:center; justify-content:space-between; padding:11px 15px; border-bottom:1px solid #1A2421;">
+        <span style="color:#E8F0EC; font-weight:700; font-size:13.5px;">One-line installer</span>
+        <span style="color:#07100C; background:#46E08A; font-size:11px; font-weight:600; padding:2px 8px;">RECOMMENDED</span>
+      </div>
+      <div style="padding:15px; font-size:13px; line-height:1.7; color:#A9B5AF;">
+        <div style="white-space:pre-wrap; word-break:break-all;"><span style="color:#5A6663;"># auth + auto-generated creds, random port</span></div>
+        <div style="white-space:pre-wrap; word-break:break-all;"><span class="ns5-prompt">$&nbsp;</span><span style="color:#38D6D6;">curl</span> -fsSL <span style="color:#E8B84B;">https://raw.githubusercontent.com/ZingerLittleBee/next-socks5/main/install.sh</span> <span style="color:#6A7672;">|</span> <span style="color:#38D6D6;">sh</span></div>
+        <div style="white-space:pre-wrap;">&nbsp;</div>
+        <div style="white-space:pre-wrap; word-break:break-all;"><span style="color:#5A6663;"># or pass flags (note the -s --)</span></div>
+        <div style="white-space:pre-wrap; word-break:break-all;"><span class="ns5-prompt">$&nbsp;</span><span style="color:#38D6D6;">curl</span> -fsSL <span style="color:#E8B84B;">...install.sh</span> <span style="color:#6A7672;">|</span> <span style="color:#38D6D6;">sh</span> -s -- --port <span style="color:#E8B84B;">1080</span></div>
+      </div>
+    </div>
+
+    <!-- Docker -->
+    <div style="border:1px solid #283330; background:#0A0F0D;">
+      <div style="display:flex; align-items:center; justify-content:space-between; padding:11px 15px; border-bottom:1px solid #1A2421;">
+        <span style="color:#E8F0EC; font-weight:700; font-size:13.5px;">Docker</span>
+        <span style="color:#52605B; font-size:11px;">host networking</span>
+      </div>
+      <div style="padding:15px; font-size:13px; line-height:1.7; color:#A9B5AF;">
+        <div style="white-space:pre-wrap; word-break:break-all;"><span class="ns5-prompt">$&nbsp;</span><span style="color:#38D6D6;">docker</span> run -d --name next-socks5 \</div>
+        <div style="white-space:pre-wrap; word-break:break-all;">    --network host \</div>
+        <div style="white-space:pre-wrap; word-break:break-all;">    ghcr.io/zingerlittlebee/<span style="color:#E8B84B;">next-socks5:latest</span> \</div>
+        <div style="white-space:pre-wrap; word-break:break-all;">    --listen <span style="color:#E8B84B;">0.0.0.0:1080</span></div>
+      </div>
+    </div>
+
+    <!-- Prebuilt binary -->
+    <div style="border:1px solid #283330; background:#0A0F0D;">
+      <div style="display:flex; align-items:center; justify-content:space-between; padding:11px 15px; border-bottom:1px solid #1A2421;">
+        <span style="color:#E8F0EC; font-weight:700; font-size:13.5px;">Prebuilt binary</span>
+        <span style="color:#52605B; font-size:11px;">static musl</span>
+      </div>
+      <div style="padding:15px; font-size:13px; line-height:1.7; color:#A9B5AF;">
+        <div style="white-space:pre-wrap; word-break:break-all;"><span class="ns5-prompt">$&nbsp;</span><span style="color:#38D6D6;">curl</span> -fL -o next-socks5.tar.gz \</div>
+        <div style="white-space:pre-wrap; word-break:break-all;">    <span style="color:#E8B84B;">https://github.com/ZingerLittleBee/next-socks5/releases/latest/download/next-socks5-x86_64-unknown-linux-musl.tar.gz</span></div>
+        <div style="white-space:pre-wrap; word-break:break-all;"><span class="ns5-prompt">$&nbsp;</span><span style="color:#38D6D6;">tar</span> xzf next-socks5.tar.gz</div>
+        <div style="white-space:pre-wrap; word-break:break-all;"><span class="ns5-prompt">$&nbsp;</span>./next-socks5-x86_64-unknown-linux-musl/next-socks5 serve --no-tui --listen <span style="color:#E8B84B;">0.0.0.0:1080</span></div>
+      </div>
+    </div>
+
+    <!-- From source -->
+    <div style="border:1px solid #283330; background:#0A0F0D;">
+      <div style="display:flex; align-items:center; justify-content:space-between; padding:11px 15px; border-bottom:1px solid #1A2421;">
+        <span style="color:#E8F0EC; font-weight:700; font-size:13.5px;">From source</span>
+        <span style="color:#52605B; font-size:11px;">cargo</span>
+      </div>
+      <div style="padding:15px; font-size:13px; line-height:1.7; color:#A9B5AF;">
+        <div style="white-space:pre-wrap; word-break:break-all;"><span class="ns5-prompt">$&nbsp;</span><span style="color:#38D6D6;">cargo</span> install --git \</div>
+        <div style="white-space:pre-wrap; word-break:break-all;">    <span style="color:#E8B84B;">https://github.com/ZingerLittleBee/next-socks5</span></div>
+        <div style="white-space:pre-wrap; word-break:break-all;"><span class="ns5-prompt">$&nbsp;</span>next-socks5 serve <span style="color:#5A6663;"># TUI dashboard</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- usage line -->
+  <div style="margin-top:13px; border:1px solid #283330; background:#0C110F; padding:15px; font-size:13.5px; color:#A9B5AF;">
+    <div style="white-space:pre-wrap; word-break:break-all;"><span style="color:#5A6663;"># test it</span></div>
+    <div style="white-space:pre-wrap; word-break:break-all;"><span class="ns5-prompt">$&nbsp;</span><span style="color:#38D6D6;">curl</span> --socks5 <span style="color:#46E08A;">alice:secret@127.0.0.1:1080</span> https://example.com</div>
+  </div>
+</section>

@@ -1,0 +1,100 @@
+---
+import Logo from './Logo.astro';
+import { REPO } from '../consts';
+
+const INSTALL_CMD =
+  'curl -fsSL https://raw.githubusercontent.com/ZingerLittleBee/next-socks5/main/install.sh | sh';
+---
+
+<footer style="max-width:1180px; margin:0 auto; padding:64px 28px 70px;">
+  <div
+    style="border:1px solid #283330; background:#0A0F0D; padding:48px 34px; text-align:center; position:relative; overflow:hidden;"
+  >
+    <div style="position:absolute; inset:0; background:radial-gradient(ellipse at center top, rgba(70,224,138,0.08), transparent 60%); pointer-events:none;"></div>
+    <div style="position:relative;">
+      <h2 style="margin:0 0 14px; font-size:34px; font-weight:700; color:#EEF5F0; letter-spacing:-0.8px;">
+        Spin up a proxy in one command.
+      </h2>
+      <p style="margin:0 0 26px; color:#8C9A95; font-size:14.5px;">
+        Pure Rust. No C dependencies. Auto-generated credentials. A dashboard worth watching.
+      </p>
+      <div
+        style="display:inline-flex; align-items:stretch; max-width:100%; border:1px solid #283330; background:#0C110F; text-align:left; vertical-align:middle;"
+      >
+        <div style="flex:1 1 auto; min-width:0; overflow-x:auto; white-space:nowrap; padding:12px 16px; font-size:12.5px;">
+          <span class="ns5-prompt">$&nbsp;</span><span style="color:#38D6D6;">curl</span> <span style="color:#CBD6D0;">-fsSL</span> <span style="color:#E8B84B;">https://raw.githubusercontent.com/ZingerLittleBee/next-socks5/main/install.sh</span> <span style="color:#6A7672;">|</span> <span style="color:#38D6D6;">sh</span>
+        </div>
+        <button
+          id="ns5-copy"
+          type="button"
+          title="Copy command"
+          aria-label="Copy install command"
+          data-cmd={INSTALL_CMD}
+          class="ns5-copy-btn"
+          style="flex:none; display:inline-flex; align-items:center; justify-content:center; width:46px; border:none; border-left:1px solid #283330; background:transparent; color:#46E08A; cursor:pointer; padding:0;"
+        >
+          <svg class="ns5-icon-copy" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="13" height="13" x="9" y="9" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+          <svg class="ns5-icon-check" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" style="display:none;"><path d="M20 6 9 17l-5-5"></path></svg>
+        </button>
+      </div>
+      <div style="display:flex; align-items:center; justify-content:center; gap:14px; margin-top:30px; flex-wrap:wrap;">
+        <a
+          href={REPO}
+          class="ns5-btn-solid"
+          style="display:inline-flex; align-items:center; gap:9px; background:#46E08A; color:#07100C; text-decoration:none; padding:12px 24px; font-weight:700; font-size:14.5px;"
+          >★ Star on GitHub</a
+        >
+        <a
+          href={`${REPO}/releases`}
+          class="ns5-btn-ghost"
+          style="display:inline-flex; align-items:center; gap:9px; background:transparent; color:#CBD6D0; text-decoration:none; padding:12px 24px; font-weight:600; font-size:14.5px; border:1px solid #2E3A36;"
+          >Releases</a
+        >
+      </div>
+    </div>
+  </div>
+
+  <div
+    style="display:flex; align-items:center; justify-content:space-between; gap:20px; flex-wrap:wrap; margin-top:34px; padding-top:24px; border-top:1px solid #161F1C; color:#5C6863; font-size:13px;"
+  >
+    <div style="display:flex; align-items:center; gap:10px;">
+      <Logo size={24} icon={14} />
+      <span style="color:#8C9A95;">next-socks5</span>
+      <span>— a SOCKS5 server in Rust</span>
+    </div>
+    <div style="display:flex; align-items:center; gap:22px;">
+      <a href={REPO} class="ns5-link" style="color:#5C6863;">GitHub</a>
+      <a href={`${REPO}/releases`} class="ns5-link" style="color:#5C6863;">Releases</a>
+      <a href={`${REPO}/blob/main/README.md`} class="ns5-link" style="color:#5C6863;">Docs</a>
+      <a href={`${REPO}/blob/main/LICENSE`} class="ns5-link" style="color:#5C6863;">License</a>
+      <span style="color:#3A4642;">Built with Rust</span>
+    </div>
+  </div>
+</footer>
+
+<script>
+  // Footer install-command copy button: copies the full command, then swaps the
+  // clipboard icon to a green check for 1.6s (matching the design prototype).
+  const btn = document.getElementById('ns5-copy');
+  if (btn) {
+    const copyIcon = btn.querySelector<SVGElement>('.ns5-icon-copy');
+    const checkIcon = btn.querySelector<SVGElement>('.ns5-icon-check');
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    btn.addEventListener('click', async () => {
+      const cmd = btn.getAttribute('data-cmd') ?? '';
+      try {
+        await navigator.clipboard?.writeText(cmd);
+      } catch {
+        // Clipboard API unavailable (e.g. insecure context) — ignore silently.
+      }
+      if (copyIcon) copyIcon.style.display = 'none';
+      if (checkIcon) checkIcon.style.display = 'inline-block';
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        if (copyIcon) copyIcon.style.display = 'inline-block';
+        if (checkIcon) checkIcon.style.display = 'none';
+      }, 1600);
+    });
+  }
+</script>

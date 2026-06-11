@@ -1,0 +1,99 @@
+---
+import { REPO, VERSION } from '../consts';
+
+// Headline performance / footprint numbers from the project README.
+const stats = [
+  { value: '~2 GB/s', label: 'relay throughput', color: '#46E08A' },
+  { value: '~1.6 ms', label: 'added latency', color: '#38D6D6' },
+  { value: '~6k/s', label: 'new connections', color: '#E8F0EC' },
+  { value: '3.5 MB', label: 'scratch image', color: '#E8F0EC' },
+  { value: '0&nbsp;C', label: 'deps · pure Rust', color: '#E8F0EC' },
+];
+---
+
+<header style="position:relative; max-width:1180px; margin:0 auto; padding:78px 28px 30px; overflow:hidden;">
+  <div
+    style="position:absolute; top:-40px; left:50%; width:760px; height:420px; transform:translateX(-50%); background:radial-gradient(ellipse at center, rgba(70,224,138,0.10), rgba(56,214,214,0.05) 45%, transparent 70%); pointer-events:none;"
+  >
+  </div>
+  <div style="position:relative;">
+    <div
+      class="ns5-hero-grid"
+      style="display:grid; grid-template-columns:minmax(0,1.05fr) minmax(0,0.95fr); gap:46px; align-items:center;"
+    >
+      <div style="min-width:0;">
+        <div
+          style="display:inline-flex; align-items:center; gap:10px; padding:5px 12px; border:1px solid #233029; color:#6FB78F; font-size:12.5px; letter-spacing:0.6px; margin-bottom:26px;"
+        >
+          <span style="width:7px; height:7px; background:#46E08A; border-radius:50%; box-shadow:0 0 9px #46E08A;"></span>
+          SOCKS5 SERVER · RFC 1928 + RFC 1929 · WRITTEN IN RUST
+        </div>
+        <h1
+          class="ns5-h1"
+          style="margin:0; font-size:54px; line-height:1.05; font-weight:700; letter-spacing:-1.3px; color:#EEF5F0; text-wrap:balance;"
+        >
+          A SOCKS5 proxy that <span style="color:#46E08A;">shows its work.</span>
+        </h1>
+        <p style="margin:22px 0 0; font-size:17px; line-height:1.6; color:#9BA8A2; text-wrap:pretty;">
+          Lightweight, scalable, hand-written protocol — no bloat. Watch every connection in a live
+          terminal dashboard, or run it headless in a <span style="color:#CBD6D0;">~3.5&nbsp;MB</span>
+          container. One command and you're proxying.
+        </p>
+
+        <!-- CTA row -->
+        <div style="display:flex; align-items:center; gap:14px; margin-top:36px; flex-wrap:wrap;">
+          <a
+            href="#install"
+            class="ns5-btn-solid"
+            style="display:inline-flex; align-items:center; gap:9px; background:#46E08A; color:#07100C; text-decoration:none; padding:12px 22px; font-weight:700; font-size:14.5px;"
+            >Get started →</a
+          >
+          <a
+            href={REPO}
+            class="ns5-btn-ghost"
+            style="display:inline-flex; align-items:center; gap:9px; background:transparent; color:#CBD6D0; text-decoration:none; padding:12px 22px; font-weight:600; font-size:14.5px; border:1px solid #2E3A36;"
+            >View on GitHub</a
+          >
+        </div>
+      </div>
+
+      <!-- hero terminal (right column) -->
+      <div style="border:1px solid #283330; background:#0A0F0D; box-shadow:0 26px 64px -30px rgba(0,0,0,0.85);">
+        <div
+          style="display:flex; align-items:center; gap:9px; padding:9px 13px; background:#0C110F; border-bottom:1px solid #1A2421;"
+        >
+          <span style="width:11px; height:11px; border-radius:50%; background:#FF6B5B;"></span>
+          <span style="width:11px; height:11px; border-radius:50%; background:#E8B84B;"></span>
+          <span style="width:11px; height:11px; border-radius:50%; background:#46E08A;"></span>
+          <span style="margin-left:6px; color:#52605B; font-size:12px; white-space:nowrap;">root@server: ~</span>
+        </div>
+        <div style="padding:17px 17px; font-size:13px; line-height:1.78;">
+          <div style="white-space:pre-wrap; word-break:break-all;"><span class="ns5-prompt">$&nbsp;</span><span style="color:#38D6D6;">curl</span> -fsSL <span style="color:#E8B84B;">…/install.sh</span> <span style="color:#6A7672;">|</span> <span style="color:#38D6D6;">sh</span></div>
+          <div style="color:#46E08A;">  ✓ next-socks5 v{VERSION} installed</div>
+          <div style="color:#46E08A;">  ✓ user 'alice'  ·  free port 1080</div>
+          <div style="color:#46E08A;">  ✓ systemd service started</div>
+          <div style="white-space:pre;">&nbsp;</div>
+          <div style="color:#7C8884;">  ready → <span style="color:#38D6D6;">socks5://alice:****@…:1080</span></div>
+          <div style="white-space:pre;">&nbsp;</div>
+          <div style="white-space:pre-wrap; word-break:break-all;"><span class="ns5-prompt">$&nbsp;</span><span style="color:#38D6D6;">curl</span> --socks5 <span style="color:#46E08A;">alice:****@127.0.0.1:1080</span> \</div>
+          <div style="white-space:pre-wrap;">       <span style="color:#CBD6D0;">https://example.com</span></div>
+          <div><span style="color:#46E08A;">  HTTP/2 200</span> <span style="color:#5A6663;">· proxied in 1.6 ms</span><span class="ns5-cursor"></span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- stat strip -->
+    <div
+      style="display:flex; flex-wrap:wrap; gap:38px; margin-top:46px; padding-top:26px; border-top:1px solid #161F1C;"
+    >
+      {
+        stats.map((s) => (
+          <div>
+            <div style={`font-size:26px; font-weight:700; color:${s.color};`} set:html={s.value} />
+            <div style="font-size:12px; color:#5C6863; margin-top:3px;">{s.label}</div>
+          </div>
+        ))
+      }
+    </div>
+  </div>
+</header>

@@ -1,0 +1,41 @@
+---
+import Logo from './Logo.astro';
+import { REPO, VERSION } from '../consts';
+
+const links = [
+  { href: '#dashboard', label: 'Dashboard' },
+  { href: '#features', label: 'Features' },
+  { href: '#install', label: 'Install' },
+  { href: '#config', label: 'Config' },
+  { href: '#performance', label: 'Perf' },
+];
+---
+
+<nav
+  style="position:sticky; top:0; z-index:50; display:flex; align-items:center; justify-content:space-between; gap:24px; padding:14px 28px; border-bottom:1px solid #1A2421; background:rgba(7,11,10,0.86); backdrop-filter:blur(8px);"
+>
+  <div style="display:flex; align-items:center; gap:11px;">
+    <Logo />
+    <span style="font-weight:700; color:#E8F0EC; letter-spacing:0.5px; white-space:nowrap;"
+      >next-socks5</span
+    >
+    <span style="color:#6FB78F; font-size:12px; padding:2px 7px; border:1px solid #2E4034; margin-left:4px;"
+      >v{VERSION}</span
+    >
+  </div>
+  <div class="ns5-nav-links" style="display:flex; align-items:center; gap:26px; font-size:13.5px;">
+    {
+      links.map((l) => (
+        <a href={l.href} class="ns5-link" style="color:#8C9A95;">
+          {l.label}
+        </a>
+      ))
+    }
+    <a
+      href={REPO}
+      class="ns5-star ns5-btn-solid"
+      style="display:inline-flex; align-items:center; gap:7px; color:#07100C; background:#46E08A; text-decoration:none; padding:7px 14px; font-weight:600;"
+      >★ Star</a
+    >
+  </div>
+</nav>

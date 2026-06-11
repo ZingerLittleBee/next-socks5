@@ -1,0 +1,23 @@
+{
+  "name": "next-socks5-landing",
+  "type": "module",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Marketing landing page for next-socks5 — a terminal-styled static site built with Astro",
+  "scripts": {
+    "dev": "astro dev",
+    "start": "astro dev",
+    "build": "astro build",
+    "preview": "astro preview",
+    "astro": "astro",
+    "og": "node scripts/generate-og.mjs"
+  },
+  "dependencies": {
+    "astro": "^6.4.6"
+  },
+  "devDependencies": {
+    "@resvg/resvg-js": "^2.6.2",
+    "@types/node": "^22.10.2"
+  },
+  "packageManager": "bun@1.3.5"
+}

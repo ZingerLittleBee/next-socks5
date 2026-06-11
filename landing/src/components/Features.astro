@@ -1,0 +1,61 @@
+---
+const features = [
+  {
+    code: '0x01',
+    title: 'CONNECT + UDP ASSOCIATE',
+    body: 'Both core SOCKS5 commands (RFC 1928), with IPv4, IPv6 and domain address types and server-side DNS. BIND is rejected by design.',
+  },
+  {
+    code: '0x02',
+    title: 'Multi-user auth',
+    body: 'No-Auth or username/password (RFC 1929). List several credentials and serve every user from a single port — no port-per-user.',
+  },
+  {
+    code: '0x03',
+    title: 'Secure by default',
+    body: 'Egress filtering refuses loopback, link-local (cloud metadata) and RFC1918 targets — an SSRF / open-relay guard you opt out of, not into.',
+  },
+  {
+    code: '0x04',
+    title: 'Headless for containers',
+    bodyHtml:
+      '<span style="color:#CBD6D0;">--no-tui</span> streams events to stdout for systemd / Docker. The TUI is an optional feature, so headless builds drop its dependencies entirely.',
+  },
+  {
+    code: '0x05',
+    title: 'UDP relay through NAT',
+    body: 'Pin the relay to a port range and advertise a client-reachable BND address, so UDP ASSOCIATE works behind firewalls and Docker bridge networking.',
+  },
+  {
+    code: '0x06',
+    title: 'Robust under load',
+    body: 'Connect / idle timeouts, optional global & per-IP connection caps enforced at accept time, half-open-aware relay, and graceful shutdown.',
+  },
+];
+---
+
+<section id="features" style="max-width:1180px; margin:0 auto; padding:56px 28px 24px;">
+  <div style="color:#46E08A; font-size:12.5px; letter-spacing:1.5px; margin-bottom:8px;">// FEATURES</div>
+  <h2 style="margin:0 0 30px; font-size:32px; font-weight:700; color:#E8F0EC; letter-spacing:-0.5px;">
+    Everything the RFC asks for. Nothing it doesn't.
+  </h2>
+  <div class="ns5-features-grid" style="display:grid; grid-template-columns:repeat(3, 1fr); gap:13px;">
+    {
+      features.map((f) => (
+        <div class="ns5-card" style="position:relative; border:1px solid #283330; background:#0A0F0D; padding:22px 20px;">
+          <span style="position:absolute; top:-8px; left:14px; background:#0A0F0D; padding:0 7px; color:#46E08A; font-size:12px;">
+            {f.code}
+          </span>
+          <h3 style="margin:6px 0 9px; font-size:16px; color:#E8F0EC; font-weight:700;">{f.title}</h3>
+          {
+            f.bodyHtml ? (
+              <p style="margin:0; font-size:13.5px; color:#8C9A95; line-height:1.6; text-wrap:pretty;" set:html={f.bodyHtml} />
+            ) : (
+              <p style="margin:0; font-size:13.5px; color:#8C9A95; line-height:1.6; text-wrap:pretty;">{f.body}</p>
+            )
+          }
+        </div>
+      ))
+    }
+  </div>
+</section>

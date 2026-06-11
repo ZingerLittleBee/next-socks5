@@ -1,0 +1,369 @@
+---
+// Faithful recreation of the live `--mock` ratatui TUI dashboard.
+// The initial markup matches the design pixel-for-pixel; a client script then
+// brings it to life (throughput, trend chart, connection traffic, scrolling
+// log, counters) — a "living" dashboard, disabled under prefers-reduced-motion.
+
+// Humanize a byte count the same way the client script does, so the
+// server-rendered initial values and the first animated frame agree exactly.
+function humanBytes(b: number): string {
+  if (b >= 1048576) return (b / 1048576).toFixed(2) + ' MB';
+  if (b >= 1024) return (b / 1024).toFixed(2) + ' KB';
+  return b + ' B';
+}
+function fmtAge(s: number): string {
+  if (s < 60) return s + 's';
+  if (s < 3600) return Math.floor(s / 60) + 'm';
+  return Math.floor(s / 3600) + 'h';
+}
+
+const conns = [
+  { id: '14', src: '10.0.42.13:54012', tgt: 'example.com:443', kind: 'CONNECT', kc: '#46E08A', up: 3565158, down: 86098575, age: 120 },
+  { id: '15', src: '10.0.118.7:51199', tgt: 'github.com:443', kind: 'CONNECT', kc: '#46E08A', up: 1258291, down: 46661632, age: 60 },
+  { id: '16', src: '10.0.7.221:60233', tgt: 'api.ipify.org:443', kind: 'CONNECT', kc: '#46E08A', up: 65536, down: 12595, age: 58 },
+  { id: '17', src: '10.0.201.5:49888', tgt: 'cdn.example.net:80', kind: 'UDP', kc: '#38D6D6', up: 225280, down: 5347737, age: 47 },
+  { id: '18', src: '10.0.66.90:52741', tgt: 'speed.example.com:443', kind: 'CONNECT', kc: '#46E08A', up: 9332326, down: 422051840, age: 41 },
+  { id: '19', src: '10.0.5.34:55010', tgt: 'db.internal:5432', kind: 'CONNECT', kc: '#46E08A', up: 122880, down: 655360, age: 12 },
+  { id: '20', src: '10.0.150.2:58820', tgt: 'example.com:443', kind: 'UDP', kc: '#38D6D6', up: 45056, down: 19149, age: 4 },
+];
+---
+
+<section id="dashboard" style="max-width:1180px; margin:0 auto; padding:64px 28px 24px;">
+  <div
+    style="display:flex; align-items:flex-end; justify-content:space-between; gap:30px; flex-wrap:wrap; margin-bottom:22px;"
+  >
+    <div style="flex:1 1 320px;">
+      <div style="color:#46E08A; font-size:12.5px; letter-spacing:1.5px; margin-bottom:8px;">// THE DASHBOARD</div>
+      <h2 style="margin:0; font-size:32px; font-weight:700; color:#E8F0EC; letter-spacing:-0.5px;">
+        Watch every byte, live.
+      </h2>
+    </div>
+    <p style="margin:0; flex:0 1 430px; color:#8C9A95; font-size:14px; line-height:1.6; text-wrap:pretty;">
+      A real-time terminal UI built on ratatui — throughput trend, success/error stats, a sortable
+      connection table and a scrolling log. Attach to a running headless server over a local socket.
+    </p>
+  </div>
+
+  <!-- terminal window -->
+  <div
+    id="ns5-dash"
+    style="border:1px solid #283330; background:#0A0F0D; box-shadow:0 30px 80px -30px rgba(0,0,0,0.8); position:relative; overflow:hidden;"
+  >
+    <!-- window chrome -->
+    <div
+      style="display:flex; align-items:center; gap:10px; padding:9px 14px; background:#0C110F; border-bottom:1px solid #1A2421;"
+    >
+      <span style="width:11px; height:11px; border-radius:50%; background:#FF6B5B;"></span>
+      <span style="width:11px; height:11px; border-radius:50%; background:#E8B84B;"></span>
+      <span style="width:11px; height:11px; border-radius:50%; background:#46E08A;"></span>
+      <span style="margin:0 auto; color:#52605B; font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;"
+        >next-socks5 serve --listen 0.0.0.0:1080 --mock</span
+      >
+    </div>
+
+    <div style="padding:0; font-size:13px; line-height:1.5;">
+      <!-- ratatui title/status line (black on cyan) -->
+      <div
+        style="background:#38D6D6; color:#06100F; font-weight:700; padding:3px 10px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;"
+      >
+        next-socks5&nbsp;&nbsp;-&nbsp;&nbsp;0.0.0.0:1080&nbsp;&nbsp;-&nbsp;&nbsp;up <span id="st-up">0:14:32</span>&nbsp;&nbsp;-&nbsp;&nbsp;active <span id="st-active">7</span>&nbsp;&nbsp;-&nbsp;&nbsp;tab:focus s:sort ↑↓/jk:scroll q:quit
+      </div>
+
+      <div style="padding:13px;">
+        <!-- INFO BAND -->
+        <div class="ns5-dash-info" style="display:grid; grid-template-columns:37fr 63fr; gap:11px; margin-bottom:11px;">
+          <!-- left column: throughput over stats -->
+          <div style="display:flex; flex-direction:column; gap:11px;">
+            <!-- throughput -->
+            <div style="position:relative; border:1px solid #283330; padding:11px 13px 10px;">
+              <span style="position:absolute; top:-8px; left:11px; background:#0A0F0D; padding:0 6px; color:#8C9A95; font-size:12px;">Throughput</span>
+              <div style="white-space:pre; color:#CBD6D0;">Up:    <span id="tp-up" style="color:#46E08A;">  245.3</span> KB/s  total <span id="tp-up-total" style="color:#9BA8A2;">1.82 GB</span></div>
+              <div style="white-space:pre; color:#CBD6D0;">Down:  <span id="tp-down" style="color:#38D6D6;"> 1788.5</span> KB/s  total <span id="tp-down-total" style="color:#9BA8A2;">14.21 GB</span></div>
+              <div style="white-space:pre; color:#5A6663;">peak  ↑512 ↓2048 KB/s</div>
+            </div>
+            <!-- stats -->
+            <div style="position:relative; border:1px solid #283330; padding:11px 13px 10px; flex:1;">
+              <span style="position:absolute; top:-8px; left:11px; background:#0A0F0D; padding:0 6px; color:#8C9A95; font-size:12px;">Stats</span>
+              <div style="white-space:pre; color:#CBD6D0;">conns total=<span id="st-total" style="color:#E8F0EC;">1283</span>  active=<span id="st-active2" style="color:#E8F0EC;">7</span>  ok=<span id="st-ok" style="color:#46E08A;">1271</span>  fail=<span id="st-fail" style="color:#E8B84B;">12</span>  (<span id="st-pct" style="color:#46E08A;">99.1%</span>)</div>
+              <div style="white-space:pre; margin-top:3px;"><span style="color:#E8B84B;">0x01 general=2</span>   <span style="color:#5A6663;">0x02 ruleset=0</span>   <span style="color:#E8B84B;">0x03 netunreach=1</span></div>
+              <div style="white-space:pre;"><span style="color:#E8B84B;">0x04 hostunreach=3</span>   <span style="color:#E8B84B;">0x05 connrefused=5</span>   <span style="color:#5A6663;">0x06 ttl=0</span></div>
+              <div style="white-space:pre;"><span style="color:#E8B84B;">0x07 badcmd=1</span>   <span style="color:#5A6663;">0x08 badatyp=0</span></div>
+              <div style="white-space:pre; color:#E8B84B; margin-top:3px;">top error  0x05 connrefused =5 of 12 failures</div>
+            </div>
+          </div>
+
+          <!-- trend chart -->
+          <div style="position:relative; border:1px solid #283330; padding:11px 13px 8px;">
+            <span style="position:absolute; top:-8px; left:11px; background:#0A0F0D; padding:0 6px; color:#8C9A95; font-size:12px;">Trend (30s)</span>
+            <span style="position:absolute; top:-8px; right:13px; background:#0A0F0D; padding:0 6px; font-size:12px;"><span style="color:#46E08A;">↑ up</span>&nbsp;&nbsp;<span style="color:#38D6D6;">↓ down</span></span>
+            <div style="display:flex; gap:8px;">
+              <div style="display:flex; flex-direction:column; justify-content:space-between; align-items:flex-end; font-size:11px; color:#5A6663; padding:2px 0 16px; min-width:54px;">
+                <span>2.0 MB/s</span><span>1.0 MB/s</span><span>&nbsp;</span>
+              </div>
+              <div style="flex:1; min-width:0;">
+                <svg viewBox="0 0 680 150" preserveAspectRatio="none" style="width:100%; height:152px; display:block;">
+                  <line x1="0" y1="38" x2="680" y2="38" stroke="#1A2421" stroke-width="1" stroke-dasharray="2 5"></line>
+                  <line x1="0" y1="94" x2="680" y2="94" stroke="#1A2421" stroke-width="1" stroke-dasharray="2 5"></line>
+                  <line x1="0" y1="149" x2="680" y2="149" stroke="#1A2421" stroke-width="1"></line>
+                  <polygon id="tr-up-area" points="0,128 30,120 60,126 90,112 120,108 150,118 180,110 210,102 240,114 270,122 300,109 330,100 360,107 390,119 420,111 450,98 480,112 510,121 540,108 570,103 600,114 630,109 660,104 680,107 680,150 0,150" fill="rgba(70,224,138,0.08)"></polygon>
+                  <polyline id="tr-up-line" points="0,128 30,120 60,126 90,112 120,108 150,118 180,110 210,102 240,114 270,122 300,109 330,100 360,107 390,119 420,111 450,98 480,112 510,121 540,108 570,103 600,114 630,109 660,104 680,107" fill="none" stroke="#46E08A" stroke-width="1.7"></polyline>
+                  <polygon id="tr-down-area" points="0,95 30,70 60,82 90,55 120,40 150,62 180,48 210,30 240,52 270,68 300,45 330,28 360,38 390,58 420,42 450,25 480,46 510,60 540,38 570,30 600,50 630,42 660,34 680,40 680,150 0,150" fill="rgba(56,214,214,0.07)"></polygon>
+                  <polyline id="tr-down-line" points="0,95 30,70 60,82 90,55 120,40 150,62 180,48 210,30 240,52 270,68 300,45 330,28 360,38 390,58 420,42 450,25 480,46 510,60 540,38 570,30 600,50 630,42 660,34 680,40" fill="none" stroke="#38D6D6" stroke-width="1.7"></polyline>
+                  <line x1="679" y1="0" x2="679" y2="150" stroke="#33403B" stroke-width="1" stroke-dasharray="3 3"></line>
+                  <circle id="tr-up-dot" cx="680" cy="107" r="2.6" fill="#46E08A"></circle>
+                  <circle id="tr-down-dot" cx="680" cy="40" r="2.6" fill="#38D6D6"></circle>
+                </svg>
+                <div style="display:flex; justify-content:space-between; font-size:11px; color:#5A6663; padding-top:2px;">
+                  <span>-30s</span><span>-15s</span><span>now</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- MAIN ROW: connections | log -->
+        <div class="ns5-dash-main" style="display:grid; grid-template-columns:62fr 38fr; gap:11px;">
+          <!-- connections (focused) -->
+          <div style="position:relative; border:1px solid #38D6D6; padding:11px 12px 10px;">
+            <span style="position:absolute; top:-8px; left:11px; background:#0A0F0D; padding:0 6px; color:#38D6D6; font-weight:700; font-size:12px;">Active connections (7)  sort:ID</span>
+            <table style="width:100%; border-collapse:collapse; font-size:12.5px; white-space:nowrap;">
+              <thead>
+                <tr style="color:#E8F0EC; font-weight:700; text-align:left;">
+                  <th style="padding:2px 8px 6px 0; font-weight:700;">ID</th>
+                  <th style="padding:2px 8px 6px 0; font-weight:700;">Source</th>
+                  <th style="padding:2px 8px 6px 0; font-weight:700;">Target</th>
+                  <th style="padding:2px 8px 6px 0; font-weight:700;">Kind</th>
+                  <th style="padding:2px 8px 6px 0; font-weight:700; text-align:right;">Up</th>
+                  <th style="padding:2px 8px 6px 0; font-weight:700; text-align:right;">Down</th>
+                  <th style="padding:2px 0 6px 0; font-weight:700; text-align:right;">Age</th>
+                </tr>
+              </thead>
+              <tbody id="ns5-conns" style="color:#A9B5AF;">
+                {
+                  conns.map((c) => (
+                    <tr data-up={c.up} data-down={c.down} data-age={c.age} data-kind={c.kind}>
+                      <td style="padding:1.5px 8px 1.5px 0;">{c.id}</td>
+                      <td style="padding:1.5px 8px 1.5px 0;">{c.src}</td>
+                      <td style="padding:1.5px 8px 1.5px 0; color:#CBD6D0;">{c.tgt}</td>
+                      <td style={`padding:1.5px 8px 1.5px 0; color:${c.kc};`}>{c.kind}</td>
+                      <td class="cn-up" style="padding:1.5px 8px 1.5px 0; text-align:right;">{humanBytes(c.up)}</td>
+                      <td class="cn-down" style="padding:1.5px 8px 1.5px 0; text-align:right;">{humanBytes(c.down)}</td>
+                      <td class="cn-age" style="padding:1.5px 0; text-align:right; color:#7C8884;">{fmtAge(c.age)}</td>
+                    </tr>
+                  ))
+                }
+              </tbody>
+            </table>
+          </div>
+
+          <!-- log -->
+          <div style="position:relative; border:1px solid #283330; padding:11px 12px 10px;">
+            <span style="position:absolute; top:-8px; left:11px; background:#0A0F0D; padding:0 6px; color:#8C9A95; font-size:12px;">Log (<span id="log-count">1283</span>)  ↑1271 ↓0</span>
+            <div id="ns5-log" style="font-size:12.5px; line-height:1.62; white-space:nowrap; overflow:hidden;">
+              <div style="color:#7C8884;">mock data generator running</div>
+              <div style="color:#A9B5AF;">[#14] CONNECT open 10.0.42.13:54012 -&gt; example.com:443</div>
+              <div style="color:#A9B5AF;">auth ok for 'alice'</div>
+              <div style="color:#5A6663;">[#11] CONNECT open 10.0.9.2:50122 -&gt; github.com:443  closed</div>
+              <div style="color:#E8B84B;">auth failed (denied) for 'bob'</div>
+              <div style="color:#A9B5AF;">[#15] CONNECT open 10.0.118.7:51199 -&gt; github.com:443</div>
+              <div style="color:#FF6B5B;">error 0x05: connection refused</div>
+              <div style="color:#A9B5AF;">[#17] UDP open 10.0.201.5:49888 -&gt; cdn.example.net:80</div>
+              <div style="color:#FF6B5B;">error 0x03: network unreachable</div>
+              <div style="color:#A9B5AF;">[#18] CONNECT open 10.0.66.90:52741 -&gt; speed.example.com:443</div>
+              <div style="color:#A9B5AF;">auth ok for 'carol'</div>
+              <div style="color:#A9B5AF;">[#19] CONNECT open 10.0.5.34:55010 -&gt; db.internal:5432</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+  <p style="margin:14px 2px 0; font-size:12.5px; color:#5C6863;">
+    Run the dashboard with <span style="color:#8C9A95;">next-socks5 serve</span>, preview it with
+    synthetic traffic via <span style="color:#8C9A95;">--mock</span>, or
+    <span style="color:#8C9A95;">attach</span> to a running headless server over its local socket.
+  </p>
+</section>
+
+<script>
+  // ---- Living dashboard ---------------------------------------------------
+  // Drives the `--mock` dashboard the way the real synthetic-traffic generator
+  // would: ticking throughput, a scrolling trend chart, growing per-connection
+  // traffic, a streaming log and incrementing counters. Pure cosmetic motion —
+  // skipped entirely when the user prefers reduced motion.
+  const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const root = document.getElementById('ns5-dash');
+  if (!reduce && root) {
+    const $ = (id: string) => document.getElementById(id);
+
+    const humanBytes = (b: number): string => {
+      if (b >= 1048576) return (b / 1048576).toFixed(2) + ' MB';
+      if (b >= 1024) return (b / 1024).toFixed(2) + ' KB';
+      return Math.round(b) + ' B';
+    };
+    const fmtAge = (s: number): string => {
+      if (s < 60) return s + 's';
+      if (s < 3600) return Math.floor(s / 60) + 'm';
+      return Math.floor(s / 3600) + 'h';
+    };
+    const padNum = (n: number, width: number): string => {
+      const s = n.toFixed(1);
+      return s.length >= width ? s : ' '.repeat(width - s.length) + s;
+    };
+    const rand = (lo: number, hi: number) => lo + Math.random() * (hi - lo);
+    const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+
+    // --- trend chart state: rolling windows of MB/s samples -----------------
+    const N = 24;
+    const X = (i: number) => ((i * 680) / (N - 1)).toFixed(0);
+    const Y = (v: number) => clamp(149 - v * 55.5, 4, 150).toFixed(0); // 2.0 MB/s -> y38, 0 -> y149
+    const up: number[] = [];
+    const down: number[] = [];
+    for (let i = 0; i < N; i++) {
+      up.push(rand(0.35, 0.95));
+      down.push(rand(1.0, 2.0));
+    }
+    const linePts = (arr: number[]) => arr.map((v, i) => `${X(i)},${Y(v)}`).join(' ');
+    const areaPts = (arr: number[]) => `${linePts(arr)} 680,150 0,150`;
+
+    const trUpLine = $('tr-up-line');
+    const trUpArea = $('tr-up-area');
+    const trDownLine = $('tr-down-line');
+    const trDownArea = $('tr-down-area');
+    const trUpDot = $('tr-up-dot');
+    const trDownDot = $('tr-down-dot');
+
+    const drawTrend = () => {
+      trUpLine?.setAttribute('points', linePts(up));
+      trUpArea?.setAttribute('points', areaPts(up));
+      trDownLine?.setAttribute('points', linePts(down));
+      trDownArea?.setAttribute('points', areaPts(down));
+      trUpDot?.setAttribute('cy', Y(up[N - 1]));
+      trDownDot?.setAttribute('cy', Y(down[N - 1]));
+    };
+
+    // --- counter state ------------------------------------------------------
+    let upTotalGB = 1.82;
+    let downTotalGB = 14.21;
+    let total = 1283;
+    let ok = 1271;
+    let fail = 12;
+    let uptime = 14 * 60 + 32;
+    let nextId = 21;
+
+    const rows = Array.from(document.querySelectorAll('#ns5-conns tr')) as HTMLElement[];
+    const logEl = $('ns5-log');
+
+    const LOG_OK = [
+      "auth ok for 'alice'",
+      "auth ok for 'carol'",
+      "auth ok for 'dave'",
+    ];
+    const HOSTS = ['example.com:443', 'github.com:443', 'cdn.example.net:80', 'api.ipify.org:443', 'speed.example.com:443'];
+    const pick = <T,>(a: T[]): T => a[Math.floor(Math.random() * a.length)];
+
+    const pushLog = (html: string) => {
+      if (!logEl) return;
+      const div = document.createElement('div');
+      div.innerHTML = html;
+      const first = div.firstElementChild;
+      if (first) logEl.insertBefore(first, logEl.firstChild);
+      while (logEl.children.length > 12) logEl.removeChild(logEl.lastChild as Node);
+    };
+
+    let tick = 0;
+    const step = () => {
+      tick++;
+
+      // throughput readouts
+      const upKBs = rand(180, 360);
+      const downKBs = rand(1400, 2100);
+      $('tp-up') && ($('tp-up')!.textContent = padNum(upKBs, 7));
+      $('tp-down') && ($('tp-down')!.textContent = padNum(downKBs, 7));
+      upTotalGB += upKBs / 1048576;
+      downTotalGB += downKBs / 1048576;
+      $('tp-up-total') && ($('tp-up-total')!.textContent = upTotalGB.toFixed(2) + ' GB');
+      $('tp-down-total') && ($('tp-down-total')!.textContent = downTotalGB.toFixed(2) + ' GB');
+
+      // trend: shift window, append fresh samples
+      up.shift();
+      up.push(clamp(up[up.length - 1] + rand(-0.18, 0.18), 0.3, 1.0));
+      down.shift();
+      down.push(clamp(down[down.length - 1] + rand(-0.3, 0.3), 0.85, 2.1));
+      drawTrend();
+
+      // per-connection traffic + age
+      for (const tr of rows) {
+        const kind = tr.dataset.kind;
+        let u = Number(tr.dataset.up);
+        let d = Number(tr.dataset.down);
+        let age = Number(tr.dataset.age) + 1;
+        u += rand(2_000, kind === 'UDP' ? 60_000 : 220_000);
+        d += rand(8_000, kind === 'UDP' ? 180_000 : 900_000);
+        tr.dataset.up = String(u);
+        tr.dataset.down = String(d);
+        tr.dataset.age = String(age);
+        const upCell = tr.querySelector('.cn-up');
+        const downCell = tr.querySelector('.cn-down');
+        const ageCell = tr.querySelector('.cn-age');
+        if (upCell) upCell.textContent = humanBytes(u);
+        if (downCell) downCell.textContent = humanBytes(d);
+        if (ageCell) ageCell.textContent = fmtAge(age);
+      }
+
+      // uptime
+      uptime++;
+      const h = Math.floor(uptime / 3600);
+      const m = String(Math.floor((uptime % 3600) / 60)).padStart(2, '0');
+      const s = String(uptime % 60).padStart(2, '0');
+      $('st-up') && ($('st-up')!.textContent = `${h}:${m}:${s}`);
+
+      // counters + log every few ticks
+      if (tick % 3 === 0) {
+        total += 1;
+        const host = pick(HOSTS);
+        const isUdp = Math.random() < 0.25;
+        const src = `10.0.${Math.floor(rand(1, 220))}.${Math.floor(rand(1, 250))}:${Math.floor(rand(49000, 61000))}`;
+        pushLog(`<div style="color:#A9B5AF;">[#${nextId}] ${isUdp ? 'UDP' : 'CONNECT'} open ${src} -&gt; ${host}</div>`);
+        nextId++;
+        if (Math.random() < 0.7) {
+          ok += 1;
+          if (Math.random() < 0.5) pushLog(`<div style="color:#A9B5AF;">${pick(LOG_OK)}</div>`);
+        } else {
+          fail += 1;
+          pushLog('<div style="color:#FF6B5B;">error 0x05: connection refused</div>');
+        }
+        const active = 5 + Math.floor(rand(0, 5));
+        const pct = ((ok / total) * 100).toFixed(1);
+        $('st-total') && ($('st-total')!.textContent = String(total));
+        $('st-ok') && ($('st-ok')!.textContent = String(ok));
+        $('st-fail') && ($('st-fail')!.textContent = String(fail));
+        $('st-pct') && ($('st-pct')!.textContent = pct + '%');
+        $('st-active') && ($('st-active')!.textContent = String(active));
+        $('st-active2') && ($('st-active2')!.textContent = String(active));
+        $('log-count') && ($('log-count')!.textContent = String(total));
+      }
+    };
+
+    // Only animate while the dashboard is on screen.
+    let timer: ReturnType<typeof setInterval> | undefined;
+    const start = () => {
+      if (timer) return;
+      drawTrend();
+      timer = setInterval(step, 1000);
+    };
+    const stop = () => {
+      if (timer) {
+        clearInterval(timer);
+        timer = undefined;
+      }
+    };
+    const io = new IntersectionObserver(
+      (entries) => {
+        for (const e of entries) e.isIntersecting ? start() : stop();
+      },
+      { threshold: 0.08 },
+    );
+    io.observe(root);
+  }
+</script>
