@@ -202,6 +202,22 @@ accept task while others idle) — on current evidence the kernel saturates firs
 | 7 | Latency-under-load mode (§7.4) | harness | measurement fidelity | S |
 | 8 | `SO_REUSEPORT` multi-accept (F) | code | unknown until two-host test | M |
 
+## Linux verification (2026-07-07)
+
+All findings above were tuned on macOS and re-verified on a Debian 13 x86_64 VM
+(4 vCPU) running the shipped `x86_64-unknown-linux-musl` static binary:
+
+- **Correctness:** all 134 tests (unit + integration + `reproductions.rs`
+  security suite) pass on musl — the cross-compiled release artifact behaves
+  identically to the dev build.
+- **TCP throughput:** 3.3 GB/s at c=8 on Linux loopback (vs 1.78 GB/s on the
+  macOS host), confirming the 64 KiB buffer + `TCP_NODELAY` changes carry over.
+- **DNS cache (finding E) is platform-sensitive:** the 12× headline is a
+  macOS-slow-resolver artifact. On Linux with `/etc/hosts` the cache buys ~1.8×
+  throughput and ~100× tail latency at saturation (36 ms → 0.4 ms p50). The
+  real win tracks resolver latency, so network-resolved domains benefit most.
+  Full A/B table in `docs/PERFORMANCE.md`.
+
 ## Sources
 
 - RFC 9411, "Benchmarking Methodology for Network Security Device Performance", §7.1–7.5 —

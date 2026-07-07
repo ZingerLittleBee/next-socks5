@@ -162,6 +162,45 @@ Caveat learned the hard way: back-to-back ramps on one host exhaust ephemeral
 ports into TIME_WAIT — cool down ~45 s between runs or the next ramp reports
 thousands of dial failures that have nothing to do with the proxy.
 
+### Linux cross-check (Debian 13, 4-core, musl static binary, 2026-07-07)
+
+The buffer/NODELAY/DNS-cache changes above were tuned on a macOS laptop, so they
+were re-verified on a real Debian 13 x86_64 VM (4 vCPU, 8 GB) running the actual
+`x86_64-unknown-linux-musl` release binary — the artifact that ships. All 134
+tests (including the `reproductions.rs` security suite) pass on musl. Loopback
+benchmark highlights:
+
+| Metric | macOS (10-core) | Linux musl (4-core) |
+| --- | --- | --- |
+| TCP throughput, c=8 (64 KiB buf) | 1.78 GB/s | **3.3 GB/s** |
+| UDP IP-literal, 8×7.5k pps 64 B | 59.7k pps, 0% drop | 56k pps, 0% drop |
+| UDP IP-literal, 1400 B | 79.7 MB/s | 72.5 MB/s |
+
+**Important correction to the DNS-cache number.** The 12× domain-target speedup
+reported below is a *macOS artifact*: macOS's system resolver is slow, so the
+uncached path collapsed hard. On Linux, `getaddrinfo` against `/etc/hosts` is
+cheap, so the honest A/B (cached vs the pre-cache binary, both musl, domain
+target) is more modest at saturation:
+
+| Domain target, 8 assoc | Uncached (pre) | Cached |
+| --- | --- | --- |
+| 8 × 1k pps (light) | 7.4k pps, 0% drop, RTT p50 0.24 ms | 0% drop, RTT p50 0.38 ms |
+| 8 × 7.5k pps | 30k pps, **44% drop**, RTT p50 **36 ms** | **55k pps, 0% drop, p50 0.38 ms** |
+
+So on Linux the cache buys **~1.8× throughput and ~100× tail latency at
+saturation** (36 ms → 0.4 ms), not 12×. The 12× figure only applies to hosts
+with a slow resolver. Note both A/Bs resolve `/etc/hosts`; a target resolved
+over the *network* would make each uncached lookup a full DNS round trip, so the
+real-world win for network-resolved domains sits between these two extremes and
+is likely much larger than 1.8×.
+
+Test-artifact caveat worth recording: on this box `localhost` resolves to `::1`
+first (`getent hosts localhost`), but the relay socket binds the control
+connection's IPv4 loopback — so `-domain localhost` shows 100% drop (v4 socket
+cannot reach a `::1` target). Use a v4-only name (add `127.0.0.1 bench.local` to
+`/etc/hosts`) or run the whole path over `[::1]`. This is a benchmark setup
+issue, not a relay bug; IP-literal targets are unaffected.
+
 ## UDP ASSOCIATE (first measurement, 2026-07-07)
 
 Measured with [`socks5_udp.go`](../tests/scripts/socks5_udp.go) on a 10-core

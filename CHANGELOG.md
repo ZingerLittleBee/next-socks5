@@ -9,17 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Performance release, driven by the project's first systematic benchmark pass
 (methodology, tools, and reference numbers in `docs/PERFORMANCE.md`; the full
-findings in `docs/research/socks5-performance-benchmarks.md`). All numbers
-below are from a 10-core loopback host — indicative, not universal.
+findings in `docs/research/socks5-performance-benchmarks.md`). Benchmarks were
+run on a macOS laptop and cross-checked on a Debian 13 musl VM running the
+shipped static binary (all 134 tests pass on musl); numbers are loopback and
+indicative, not universal.
 
 ### Changed
 
 - UDP relay: domain-name targets are resolved through a per-association DNS
   cache (30 s TTL, 256-entry cap) instead of one blocking `getaddrinfo` per
-  datagram — measured **12× relayed throughput** for domain targets
-  (~5k → ~60k datagrams/s, now matching IP literals) and tail latency down
-  from tens of milliseconds to ~1 ms even at light load. Resolution failures
-  are never cached; the egress policy is still enforced on every datagram.
+  datagram. The win scales with how slow the resolver is: at datagram-stream
+  saturation it is ~1.8× relayed throughput with a ~100× tail-latency drop
+  (36 ms → 0.4 ms) against a fast `/etc/hosts` resolver on Linux, and up to
+  ~12× against a slow system resolver; a domain resolved over the network
+  (a full DNS round trip per uncached datagram) benefits most. Resolution
+  failures are never cached; the egress policy is still enforced on every
+  datagram.
 - UDP relay: the per-datagram payload copy and reply re-encapsulation
   allocation are gone (borrowed decap + a reused scratch buffer), and
   IP-literal targets no longer pay a resolve-timeout timer.
