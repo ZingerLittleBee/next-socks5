@@ -168,9 +168,27 @@ Readings:
   (client→target and target→client); one-way pps capacity is roughly 2× the
   echoed figure at the knee.
 
-Follow-up experiments (per `docs/research/socks5-performance-benchmarks.md`
-finding E): domain-name targets (uncached per-datagram DNS) vs the IP-literal
-numbers above, and allocation profiling of the per-datagram encap/decap path.
+### Domain-name targets and the per-association DNS cache
+
+Datagrams that carry an ATYP=3 domain make the relay resolve the name. Before
+2026-07-07 that was one `lookup_host` (a `spawn_blocking` `getaddrinfo`) **per
+datagram**; it is now cached per association (30 s TTL, 256 entries). Measured
+with `-domain localhost` over IPv6 loopback (`[::1]` end to end, so
+`localhost`'s first resolution result matches the relay socket family):
+
+| Load (8 assoc, 64 B) | Uncached (pre) | Cached |
+| --- | --- | --- |
+| 8 × 1k pps | 7.6k pps, 0% drop, RTT p95 **35.6 ms** | 0% drop, RTT p95 ~1 ms |
+| 8 × 7.5k pps | **4.8k pps, 92% drop**, RTT p50 4.7 **s** | **59.5k pps, 0% drop**, RTT p50 0.5 ms |
+
+Per-association domain-target capacity was resolver-bound at ~5k pps; with the
+cache it matches the IP-literal knee (~60k pps, 12× more). Even far below the
+old ceiling, uncached resolution cost 35–50 ms tail latency. IP-literal numbers
+are unchanged by the cache (regression-checked at 8 and 16 associations).
+
+Remaining follow-up (per `docs/research/socks5-performance-benchmarks.md`
+finding E): allocation profiling of the per-datagram path (the encap scratch
+buffer is now reused and decap borrows its payload, both landed 2026-07-07).
 
 ## Bottom line
 

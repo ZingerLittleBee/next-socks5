@@ -36,6 +36,7 @@ var (
 	dur    = flag.Duration("d", 10*time.Second, "test duration")
 	size   = flag.Int("size", 64, "datagram payload bytes (min 16; try 64 and 1400)")
 	rate   = flag.Int("rate", 0, "per-worker send rate cap in pps (0 = unpaced)")
+	domain = flag.String("domain", "", "encapsulate datagrams with this ATYP=3 domain instead of the -target IP (must resolve to -target's IP for echoes to return); exercises the proxy's per-datagram DNS path")
 	sink   = flag.String("sink", "", "run as a UDP echo sink on this addr instead of a client")
 )
 
@@ -154,6 +155,16 @@ func encap(tIP net.IP, tPort int, payload []byte) []byte {
 	return append(out, payload...)
 }
 
+// encapDomain builds RSV(0x0000) FRAG(0x00) ATYP(0x03) LEN DOMAIN DST.PORT +
+// payload, making the proxy resolve the name per datagram (or per cache TTL).
+func encapDomain(name string, tPort int, payload []byte) []byte {
+	out := make([]byte, 0, 7+len(name)+len(payload))
+	out = append(out, 0x00, 0x00, 0x00, 0x03, byte(len(name)))
+	out = append(out, name...)
+	out = append(out, byte(tPort>>8), byte(tPort))
+	return append(out, payload...)
+}
+
 // decapPayload returns the payload of a SOCKS5 UDP datagram, or nil if the
 // header is malformed / fragmented.
 func decapPayload(b []byte) []byte {
@@ -193,8 +204,8 @@ func main() {
 
 	host, portStr, _ := net.SplitHostPort(*target)
 	tIP := net.ParseIP(host).To4()
-	if tIP == nil {
-		fmt.Println("target must be an IPv4 literal host:port")
+	if tIP == nil && *domain == "" {
+		fmt.Println("target must be an IPv4 literal host:port (or use -domain)")
 		return
 	}
 	var tPort int
@@ -250,8 +261,13 @@ func main() {
 			}()
 
 			payload := make([]byte, *size)
-			dgram := encap(tIP, tPort, payload)
-			body := dgram[10:] // payload region inside the frame
+			var dgram []byte
+			if *domain != "" {
+				dgram = encapDomain(*domain, tPort, payload)
+			} else {
+				dgram = encap(tIP, tPort, payload)
+			}
+			body := dgram[len(dgram)-*size:] // payload region inside the frame
 			var seq uint64
 			var tick *time.Ticker
 			if *rate > 0 {

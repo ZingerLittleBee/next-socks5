@@ -165,11 +165,13 @@ The UDP loop does meaningful userspace work per datagram, none of it profiled ye
   10-core loopback host, **identical at 64 B and 1400 B payloads** — direct evidence that the
   ceiling is per-datagram overhead (findings 1 and 3), not bandwidth. Past the knee goodput
   collapses (replies compete with the client flood for the same relay-socket queue).
-- **Remaining experiments:** (a) domain targets vs the IP-literal numbers above — the gap
-  isolates finding 2 (uncached DNS); (b) alloc-rate profiling for finding 1. Fix for 2 is a
-  small per-association `HashMap<String, (SocketAddr, Instant)>` TTL cache; fix for 1 is
-  reusing a scratch encap buffer (the relay loop is single-tasked per association, so one
-  reusable `Vec` suffices).
+- **Fixes applied 2026-07-07:** finding 2 — per-association DNS TTL cache (30 s, 256-entry
+  cap, `DnsCache` in `src/server/udp.rs`): domain-target capacity went from ~5k pps
+  (resolver-bound, RTT p50 4.7 s at the IP knee's load) to ~60k pps matching IP literals —
+  a 12× improvement, numbers in `docs/PERFORMANCE.md`. Finding 1 — the reply-path encap
+  scratch buffer is now reused across datagrams and `decap_ref` borrows the payload instead
+  of copying (`src/protocol/udp.rs`); IP literals also skip the per-datagram resolve timer
+  entirely. Remaining: alloc-rate profiling to confirm nothing per-datagram is left.
 
 ### F. Single accept loop (CPS ceiling on bigger hardware)
 
@@ -189,7 +191,7 @@ accept task while others idle) — on current evidence the kernel saturates firs
 | 3 | Buffer-size sweep + concurrent-capacity ramp (D + §7.5) | harness + tuning | medium | S |
 | 4 | ~~`TCP_NODELAY` on both relay sockets (C)~~ **done 2026-07-07** (WAN validation pending) | code | high for WAN request/response latency | — |
 | 5 | ~~`TcpStream::split` instead of `tokio::io::split` (B)~~ **done 2026-07-07** | code | small, free | — |
-| 6 | UDP DNS cache + encap buffer reuse (E) | code, after #1 | high for domain-target UDP | S |
+| 6 | ~~UDP DNS cache + encap buffer reuse (E)~~ **done 2026-07-07** (12× domain-target pps; see `docs/PERFORMANCE.md`) | code | high for domain-target UDP | — |
 | 7 | Latency-under-load mode (§7.4) | harness | measurement fidelity | S |
 | 8 | `SO_REUSEPORT` multi-accept (F) | code | unknown until two-host test | M |
 
