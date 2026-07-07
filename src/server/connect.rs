@@ -276,7 +276,11 @@ where
     R: AsyncReadExt + Unpin,
     W: AsyncWriteExt + Unpin,
 {
-    let mut buf = [0u8; 16 * 1024];
+    // 64 KiB won a loopback sweep of 8/16/64/256 KiB (+15-20% bulk throughput
+    // vs 16 KiB; 256 KiB regressed under cache pressure). Idle connections do
+    // not keep these pages resident; only actively relayed bytes do. See
+    // docs/PERFORMANCE.md "Relay buffer size".
+    let mut buf = [0u8; 64 * 1024];
     loop {
         match read_with_idle(src, &mut buf, idle).await? {
             // Genuine EOF: half-close the writer so the destination sees the
