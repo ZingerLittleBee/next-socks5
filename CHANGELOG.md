@@ -5,14 +5,12 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.5.0] - 2026-07-07
 
 Performance release, driven by the project's first systematic benchmark pass
-(methodology, tools, and reference numbers in `docs/PERFORMANCE.md`; the full
-findings in `docs/research/socks5-performance-benchmarks.md`). Benchmarks were
+(methodology and reference numbers in `docs/PERFORMANCE.md`). Benchmarks were
 run on a macOS laptop and cross-checked on a Debian 13 musl VM running the
-shipped static binary (all 134 tests pass on musl); numbers are loopback and
-indicative, not universal.
+shipped static binary; numbers are loopback and indicative, not universal.
 
 ### Changed
 
@@ -40,27 +38,8 @@ indicative, not universal.
 
 ### Added
 
-- `tests/scripts/socks5_udp.go`: a stdlib-only UDP ASSOCIATE load client (and
-  UDP echo sink) reporting pps, goodput, drop rate, and RTT percentiles, with
-  paced/unpaced modes and optional ATYP=3 domain encapsulation.
-- `tests/scripts/socks5_cps.go` grew `-mode thr` (bulk relay throughput against
-  a `-blast` sink) and `-mode hold` (ramp-and-hold concurrent-capacity testing,
-  RFC 9411 §7.5 style).
-- An RFC 1928 / RFC 1929 compliance audit
-  (`docs/research/rfc-1928-1929-compliance.md`): every server-side MUST is met;
-  the deliberate deviations (GSSAPI, BIND, optional UDP fragmentation) are now
-  documented in the README.
 - `install.sh`: `--udp-port-range` and `--udp-advertise` flags generate the
   matching `[udp]` config block for NAT/firewalled deployments.
-- A terminal-styled project landing page (`landing/`, Astro), deployed via
-  Cloudflare Workers.
-
-### Fixed
-
-- The smoke-test scripts (`smoke_connect.sh`, `smoke_udp.sh`) had been silently
-  broken since egress filtering became secure-by-default (their loopback
-  targets were blocked); they now run the proxy with a test-only
-  egress-relaxed config, mirroring `bench.sh`.
 
 ## [0.4.0] - 2026-06-06
 
