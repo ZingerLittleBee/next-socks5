@@ -30,6 +30,7 @@ Two zero-/low-dependency tools live under `tests/scripts/`:
 | --- | --- | --- |
 | [`bench.sh`](../tests/scripts/bench.sh) | Single-host sanity bench (throughput + latency + CPS, no-auth and password) | bash + `curl` + `python3` only. `curl` is the only mainstream tool with native SOCKS5, but it spawns a process per request, so its CPS is understated. |
 | [`socks5_cps.go`](../tests/scripts/socks5_cps.go) | Accurate CPS load client (and a TCP sink) | Pure Go stdlib. Each worker does a full RFC 1928 (+ RFC 1929) handshake and `CONNECT` in-process, so it measures real CPS and handshake-latency percentiles that `curl` cannot. |
+| [`socks5_udp.go`](../tests/scripts/socks5_udp.go) | UDP ASSOCIATE load client (and a UDP echo sink) | Pure Go stdlib. Each worker holds one association and sends SOCKS5-encapsulated datagrams through the relay to an echo sink; reports pps, echoed goodput, drop rate, and RTT percentiles. The echo path exercises both relay directions. |
 
 ### Step 1 — Single host (quick sanity check)
 
@@ -126,6 +127,50 @@ A cross-provider pair (DUT = 1 vCPU / 960 MB Debian 12; load = the 4-core host;
 The takeaway reinforces Step 3: a high-RTT, cross-provider, single-core pair is
 structurally incapable of stressing the proxy. Use same-datacenter, low-RTT,
 multi-core hosts.
+
+## UDP ASSOCIATE (first measurement, 2026-07-07)
+
+Measured with [`socks5_udp.go`](../tests/scripts/socks5_udp.go) on a 10-core
+Apple M-series laptop (macOS, loopback, client + proxy + echo sink colocated —
+all the single-host caveats above apply, plus the ones below):
+
+```sh
+go build -o /tmp/socks5_udp tests/scripts/socks5_udp.go
+/tmp/socks5_udp -sink 127.0.0.1:19091 &                       # echo sink
+./target/release/next-socks5 serve --no-tui --no-admin --config <egress-relaxed cfg> &
+/tmp/socks5_udp -c 8 -size 64 -rate 8000 -d 10s               # paced: find the lossless knee
+/tmp/socks5_udp -c 8 -size 1400 -d 10s                        # unpaced: saturation behavior
+```
+
+| Load (paced unless noted) | Echoed pps | Drop | RTT p50 / p99 |
+| --- | --- | --- | --- |
+| 8 assoc × 1k pps, 64 B | 7.6k | 0% | 0.17 / 0.36 ms |
+| 8 × 7.5k pps, 64 B | **59.7k** | **0%** | 0.22 / 0.78 ms |
+| 8 × 7.5k pps, **1400 B** | **59.7k** (= 79.7 MB/s) | **0%** | 0.27 / 1.04 ms |
+| 16 × 7.5k pps (~103k offered) | 49.9k | 51% | 95 / 245 ms |
+| 8 assoc, unpaced (~400k offered) | 7.7k | 98% | 126 / 215 ms |
+
+Readings:
+
+- **Lossless relay capacity on this host: ~60k datagrams/s**, identical at 64 B
+  and 1400 B — the ceiling is **per-datagram overhead** (syscalls, per-datagram
+  timers and allocations in the relay loop), not bandwidth. At 1400 B that is
+  ~80 MB/s of UDP goodput with sub-millisecond p50 RTT.
+- **Past the knee (~60–100k pps offered), goodput collapses instead of
+  plateauing** — offered 400k pps yields only ~7k pps echoed. Part of this is
+  a measurement artifact worth understanding before quoting numbers: client
+  datagrams and target replies share the *same* per-association relay socket
+  (the RFC 1928 BND socket), so under an unpaced client flood the kernel queue
+  fills with client traffic and the *replies* are what get dropped. Real
+  deployments should set `[limits] udp_rate_pps` to keep associations below
+  the knee.
+- Echo numbers count a datagram only if BOTH relay directions succeeded
+  (client→target and target→client); one-way pps capacity is roughly 2× the
+  echoed figure at the knee.
+
+Follow-up experiments (per `docs/research/socks5-performance-benchmarks.md`
+finding E): domain-name targets (uncached per-datagram DNS) vs the IP-literal
+numbers above, and allocation profiling of the per-datagram encap/decap path.
 
 ## Bottom line
 

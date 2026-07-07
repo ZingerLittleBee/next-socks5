@@ -13,6 +13,7 @@ script itself, and all background processes are cleaned up on exit.
 | `run_all.sh` | Runs `cargo test`, then `smoke_connect.sh`, then `smoke_udp.sh`, and prints a PASS/FAIL summary. Exits non-zero if any step fails. |
 | `bench.sh` | Single-host **performance** sanity bench (throughput + latency + CPS, no-auth and password, plus a direct baseline) using only bash + `curl` + `python3`. See [`docs/PERFORMANCE.md`](../../docs/PERFORMANCE.md) for methodology, caveats, and reference numbers. |
 | `socks5_cps.go` | Accurate **CPS** load client (and a `-sink` TCP server), pure Go stdlib. Each worker does a full in-process SOCKS5 handshake + `CONNECT`, measuring real connections/s and handshake-latency percentiles that `curl` cannot. |
+| `socks5_udp.go` | **UDP ASSOCIATE** load client (and a `-sink` UDP echo server), pure Go stdlib. Each worker holds one association and blasts SOCKS5-encapsulated datagrams; reports pps each way, echoed goodput, drop rate, and RTT percentiles. Use `-rate` (paced) to find the lossless knee; unpaced mode measures saturation behavior. |
 
 ## Running
 
@@ -31,7 +32,12 @@ Benchmarking is separate from the smoke tests (it is not part of `run_all.sh`):
 ```sh
 bash tests/scripts/bench.sh                 # single-host throughput/latency/CPS
 go build -o /tmp/socks5_cps tests/scripts/socks5_cps.go   # accurate CPS client
+go build -o /tmp/socks5_udp tests/scripts/socks5_udp.go   # UDP ASSOCIATE load client
 ```
+
+On recent macOS, old Go toolchains may produce a binary that fails with
+`missing LC_UUID load command`; build with `-ldflags=-linkmode=external` or use
+a current Go release.
 
 See [`docs/PERFORMANCE.md`](../../docs/PERFORMANCE.md) for the full benchmarking
 guide, including the two-host setup needed for a trustworthy CPS ceiling.

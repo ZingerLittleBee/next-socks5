@@ -160,10 +160,14 @@ The UDP loop does meaningful userspace work per datagram, none of it profiled ye
    so high pps means one syscall per datagram each way. Nothing to change in-project without
    `unsafe`/`socket2`; just a known ceiling worth quantifying.
 
-- **Experiment:** requires the UDP bench from Part 1 first. Then: (a) measure pps with IP
-  targets (allocation cost) vs. domain targets (DNS cost) — the gap isolates finding 2;
-  (b) profile alloc rate under load (`heaptrack` or jemalloc stats) for finding 1. Fix for 2 is
-  a small per-association `HashMap<String, (SocketAddr, Instant)>` TTL cache; fix for 1 is
+- **Status: partially measured 2026-07-07** — `tests/scripts/socks5_udp.go` now exists and the
+  first numbers are in `docs/PERFORMANCE.md`: lossless relay capacity ~60k datagrams/s on a
+  10-core loopback host, **identical at 64 B and 1400 B payloads** — direct evidence that the
+  ceiling is per-datagram overhead (findings 1 and 3), not bandwidth. Past the knee goodput
+  collapses (replies compete with the client flood for the same relay-socket queue).
+- **Remaining experiments:** (a) domain targets vs the IP-literal numbers above — the gap
+  isolates finding 2 (uncached DNS); (b) alloc-rate profiling for finding 1. Fix for 2 is a
+  small per-association `HashMap<String, (SocketAddr, Instant)>` TTL cache; fix for 1 is
   reusing a scratch encap buffer (the relay loop is single-tasked per association, so one
   reusable `Vec` suffices).
 
@@ -180,7 +184,7 @@ accept task while others idle) — on current evidence the kernel saturates firs
 
 | # | Item | Type | Expected impact | Effort |
 | --- | --- | --- | --- | --- |
-| 1 | UDP bench tool + first-ever UDP numbers | harness | unlocks E entirely | S |
+| 1 | ~~UDP bench tool + first-ever UDP numbers~~ **done 2026-07-07** (`socks5_udp.go`; ~60k pps lossless knee, per-datagram-overhead-bound — see `docs/PERFORMANCE.md`) | harness | unlocks E entirely | — |
 | 2 | ~~Metrics mutex as throughput bottleneck~~ **refuted by experiment**; remaining issue is observer clone-under-lock stalls (A, Experiment 2) | code, if TUI/admin used at ≥50k conns | low-medium | S |
 | 3 | Buffer-size sweep + concurrent-capacity ramp (D + §7.5) | harness + tuning | medium | S |
 | 4 | ~~`TCP_NODELAY` on both relay sockets (C)~~ **done 2026-07-07** (WAN validation pending) | code | high for WAN request/response latency | — |
