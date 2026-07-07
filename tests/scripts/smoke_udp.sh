@@ -43,7 +43,17 @@ echo "==> Building (cargo build)"
 cargo build
 
 echo "==> Starting no-auth proxy on 127.0.0.1:$PORT"
-"$BIN" --no-tui --listen "127.0.0.1:$PORT" >"$TMP_DIR/proxy.log" 2>&1 &
+# The default [egress] policy blocks loopback destinations (SSRF guard), so a
+# smoke config must relax it for the local UDP echo target. Test-only — never
+# ship.
+CONFIG="$TMP_DIR/smoke.toml"
+cat >"$CONFIG" <<EOF
+listen = "127.0.0.1:$PORT"
+
+[egress]
+block_loopback = false
+EOF
+"$BIN" --no-tui --config "$CONFIG" >"$TMP_DIR/proxy.log" 2>&1 &
 PROXY_PID=$!
 sleep 1
 if ! kill -0 "$PROXY_PID" 2>/dev/null; then
