@@ -29,7 +29,8 @@ Two zero-/low-dependency tools live under `tests/scripts/`:
 | Tool | Role | Notes |
 | --- | --- | --- |
 | [`bench.sh`](../tests/scripts/bench.sh) | Single-host sanity bench (throughput + latency + CPS, no-auth and password) | bash + `curl` + `python3` only. `curl` is the only mainstream tool with native SOCKS5, but it spawns a process per request, so its CPS is understated. |
-| [`socks5_cps.go`](../tests/scripts/socks5_cps.go) | Accurate CPS load client (and a TCP sink) | Pure Go stdlib. Each worker does a full RFC 1928 (+ RFC 1929) handshake and `CONNECT` in-process, so it measures real CPS and handshake-latency percentiles that `curl` cannot. |
+| [`socks5_cps.go`](../tests/scripts/socks5_cps.go) | Accurate CPS load client (and a TCP sink) | Pure Go stdlib. `-mode cps` (default): each worker does a full RFC 1928 (+ RFC 1929) handshake and `CONNECT` in-process, measuring real CPS and handshake-latency percentiles that `curl` cannot. `-mode thr` + a `-blast` sink: long-lived bulk streams for relay-throughput sweeps. `-mode hold`: ramp-and-hold N idle connections (RFC 9411 §7.5 style) while you watch the proxy's RSS/fds. |
+| [`socks5_udp.go`](../tests/scripts/socks5_udp.go) | UDP ASSOCIATE load client (and a UDP echo sink) | Pure Go stdlib. Each worker holds one association and sends SOCKS5-encapsulated datagrams through the relay to an echo sink; reports pps, echoed goodput, drop rate, and RTT percentiles. The echo path exercises both relay directions. |
 
 ### Step 1 — Single host (quick sanity check)
 
@@ -126,6 +127,141 @@ A cross-provider pair (DUT = 1 vCPU / 960 MB Debian 12; load = the 4-core host;
 The takeaway reinforces Step 3: a high-RTT, cross-provider, single-core pair is
 structurally incapable of stressing the proxy. Use same-datacenter, low-RTT,
 multi-core hosts.
+
+## Relay buffer size (swept 2026-07-07)
+
+The TCP relay copies through one fixed buffer per direction. A sweep of
+8/16/64/256 KiB on a 10-core Apple M-series loopback host (`-mode thr` against
+a `-blast` sink, 10 s runs, repeated):
+
+| Buffer | c=8 aggregate | c=64 aggregate |
+| --- | --- | --- |
+| 8 KiB | 1296 MB/s | 960 MB/s |
+| 16 KiB (old default) | 1373–1519 MB/s | 1060 MB/s |
+| **64 KiB (default since 2026-07-07)** | **1664–1780 MB/s** | **1155 MB/s** |
+| 256 KiB | 1313 MB/s | 1123 MB/s |
+
+64 KiB is ~15–25% faster than 16 KiB at both stream counts; 256 KiB regresses
+at low concurrency (cache pressure). The memory side of the trade turned out
+to be mild: a ramp-and-hold of 8k **idle** connections (`-mode hold`) showed
+~22 KB RSS per connection with 64 KiB buffers — the buffer pages only become
+resident once traffic actually writes them, so the worst case (~128 KiB/conn)
+applies only to connections actively relaying, whose count is bounded by the
+NIC long before memory. Note both measurements are macOS loopback; re-verify
+the sweep on the Linux two-host setup before treating the +20% as universal.
+
+### Concurrent-capacity ramp (how to)
+
+```sh
+/tmp/socks5_cps -sink 127.0.0.1:19092 &          # drain sink
+/tmp/socks5_cps -mode hold -target 127.0.0.1:19092 -c 10000 -d 30s
+# meanwhile: ps -o rss= -p <proxy pid>
+```
+
+Caveat learned the hard way: back-to-back ramps on one host exhaust ephemeral
+ports into TIME_WAIT — cool down ~45 s between runs or the next ramp reports
+thousands of dial failures that have nothing to do with the proxy.
+
+### Linux cross-check (Debian 13, 4-core, musl static binary, 2026-07-07)
+
+The buffer/NODELAY/DNS-cache changes above were tuned on a macOS laptop, so they
+were re-verified on a real Debian 13 x86_64 VM (4 vCPU, 8 GB) running the actual
+`x86_64-unknown-linux-musl` release binary — the artifact that ships. All 134
+tests (including the `reproductions.rs` security suite) pass on musl. Loopback
+benchmark highlights:
+
+| Metric | macOS (10-core) | Linux musl (4-core) |
+| --- | --- | --- |
+| TCP throughput, c=8 (64 KiB buf) | 1.78 GB/s | **3.3 GB/s** |
+| UDP IP-literal, 8×7.5k pps 64 B | 59.7k pps, 0% drop | 56k pps, 0% drop |
+| UDP IP-literal, 1400 B | 79.7 MB/s | 72.5 MB/s |
+
+**Important correction to the DNS-cache number.** The 12× domain-target speedup
+reported below is a *macOS artifact*: macOS's system resolver is slow, so the
+uncached path collapsed hard. On Linux, `getaddrinfo` against `/etc/hosts` is
+cheap, so the honest A/B (cached vs the pre-cache binary, both musl, domain
+target) is more modest at saturation:
+
+| Domain target, 8 assoc | Uncached (pre) | Cached |
+| --- | --- | --- |
+| 8 × 1k pps (light) | 7.4k pps, 0% drop, RTT p50 0.24 ms | 0% drop, RTT p50 0.38 ms |
+| 8 × 7.5k pps | 30k pps, **44% drop**, RTT p50 **36 ms** | **55k pps, 0% drop, p50 0.38 ms** |
+
+So on Linux the cache buys **~1.8× throughput and ~100× tail latency at
+saturation** (36 ms → 0.4 ms), not 12×. The 12× figure only applies to hosts
+with a slow resolver. Note both A/Bs resolve `/etc/hosts`; a target resolved
+over the *network* would make each uncached lookup a full DNS round trip, so the
+real-world win for network-resolved domains sits between these two extremes and
+is likely much larger than 1.8×.
+
+Test-artifact caveat worth recording: on this box `localhost` resolves to `::1`
+first (`getent hosts localhost`), but the relay socket binds the control
+connection's IPv4 loopback — so `-domain localhost` shows 100% drop (v4 socket
+cannot reach a `::1` target). Use a v4-only name (add `127.0.0.1 bench.local` to
+`/etc/hosts`) or run the whole path over `[::1]`. This is a benchmark setup
+issue, not a relay bug; IP-literal targets are unaffected.
+
+## UDP ASSOCIATE (first measurement, 2026-07-07)
+
+Measured with [`socks5_udp.go`](../tests/scripts/socks5_udp.go) on a 10-core
+Apple M-series laptop (macOS, loopback, client + proxy + echo sink colocated —
+all the single-host caveats above apply, plus the ones below):
+
+```sh
+go build -o /tmp/socks5_udp tests/scripts/socks5_udp.go
+/tmp/socks5_udp -sink 127.0.0.1:19091 &                       # echo sink
+./target/release/next-socks5 serve --no-tui --no-admin --config <egress-relaxed cfg> &
+/tmp/socks5_udp -c 8 -size 64 -rate 8000 -d 10s               # paced: find the lossless knee
+/tmp/socks5_udp -c 8 -size 1400 -d 10s                        # unpaced: saturation behavior
+```
+
+| Load (paced unless noted) | Echoed pps | Drop | RTT p50 / p99 |
+| --- | --- | --- | --- |
+| 8 assoc × 1k pps, 64 B | 7.6k | 0% | 0.17 / 0.36 ms |
+| 8 × 7.5k pps, 64 B | **59.7k** | **0%** | 0.22 / 0.78 ms |
+| 8 × 7.5k pps, **1400 B** | **59.7k** (= 79.7 MB/s) | **0%** | 0.27 / 1.04 ms |
+| 16 × 7.5k pps (~103k offered) | 49.9k | 51% | 95 / 245 ms |
+| 8 assoc, unpaced (~400k offered) | 7.7k | 98% | 126 / 215 ms |
+
+Readings:
+
+- **Lossless relay capacity on this host: ~60k datagrams/s**, identical at 64 B
+  and 1400 B — the ceiling is **per-datagram overhead** (syscalls, per-datagram
+  timers and allocations in the relay loop), not bandwidth. At 1400 B that is
+  ~80 MB/s of UDP goodput with sub-millisecond p50 RTT.
+- **Past the knee (~60–100k pps offered), goodput collapses instead of
+  plateauing** — offered 400k pps yields only ~7k pps echoed. Part of this is
+  a measurement artifact worth understanding before quoting numbers: client
+  datagrams and target replies share the *same* per-association relay socket
+  (the RFC 1928 BND socket), so under an unpaced client flood the kernel queue
+  fills with client traffic and the *replies* are what get dropped. Real
+  deployments should set `[limits] udp_rate_pps` to keep associations below
+  the knee.
+- Echo numbers count a datagram only if BOTH relay directions succeeded
+  (client→target and target→client); one-way pps capacity is roughly 2× the
+  echoed figure at the knee.
+
+### Domain-name targets and the per-association DNS cache
+
+Datagrams that carry an ATYP=3 domain make the relay resolve the name. Before
+2026-07-07 that was one `lookup_host` (a `spawn_blocking` `getaddrinfo`) **per
+datagram**; it is now cached per association (30 s TTL, 256 entries). Measured
+with `-domain localhost` over IPv6 loopback (`[::1]` end to end, so
+`localhost`'s first resolution result matches the relay socket family):
+
+| Load (8 assoc, 64 B) | Uncached (pre) | Cached |
+| --- | --- | --- |
+| 8 × 1k pps | 7.6k pps, 0% drop, RTT p95 **35.6 ms** | 0% drop, RTT p95 ~1 ms |
+| 8 × 7.5k pps | **4.8k pps, 92% drop**, RTT p50 4.7 **s** | **59.5k pps, 0% drop**, RTT p50 0.5 ms |
+
+Per-association domain-target capacity was resolver-bound at ~5k pps; with the
+cache it matches the IP-literal knee (~60k pps, 12× more). Even far below the
+old ceiling, uncached resolution cost 35–50 ms tail latency. IP-literal numbers
+are unchanged by the cache (regression-checked at 8 and 16 associations).
+
+Remaining follow-up (per `docs/research/socks5-performance-benchmarks.md`
+finding E): allocation profiling of the per-datagram path (the encap scratch
+buffer is now reused and decap borrows its payload, both landed 2026-07-07).
 
 ## Bottom line
 

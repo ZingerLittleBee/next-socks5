@@ -90,6 +90,9 @@ pub async fn run(
     };
 
     let mut upstream = upstream;
+    // Nagle adds relay latency for request/response traffic; proxies
+    // conventionally disable it on both legs.
+    let _ = upstream.set_nodelay(true);
 
     // 4. Reply success with the upstream's local address as BND.
     let bind = upstream
@@ -211,8 +214,10 @@ async fn copy_bidirectional_counted(
     metrics: &Metrics,
     id: u64,
 ) -> std::io::Result<()> {
-    let (mut client_rd, mut client_wr) = tokio::io::split(client);
-    let (mut upstream_rd, mut upstream_wr) = tokio::io::split(upstream);
+    // TcpStream::split is the lock-free borrowed split; the generic
+    // tokio::io::split would take a Mutex on every poll.
+    let (mut client_rd, mut client_wr) = client.split();
+    let (mut upstream_rd, mut upstream_wr) = upstream.split();
 
     // Shared across both directions; updated on every successful relayed write.
     let last_activity = Mutex::new(Instant::now());
@@ -271,7 +276,11 @@ where
     R: AsyncReadExt + Unpin,
     W: AsyncWriteExt + Unpin,
 {
-    let mut buf = [0u8; 16 * 1024];
+    // 64 KiB won a loopback sweep of 8/16/64/256 KiB (+15-20% bulk throughput
+    // vs 16 KiB; 256 KiB regressed under cache pressure). Idle connections do
+    // not keep these pages resident; only actively relayed bytes do. See
+    // docs/PERFORMANCE.md "Relay buffer size".
+    let mut buf = [0u8; 64 * 1024];
     loop {
         match read_with_idle(src, &mut buf, idle).await? {
             // Genuine EOF: half-close the writer so the destination sees the

@@ -19,7 +19,9 @@
 
 - **SOCKS5 命令** —— `CONNECT` 与 `UDP ASSOCIATE`(RFC 1928)。`BIND` 按设计以
   应答码 `0x07` 拒绝。
-- **认证** —— 无认证(`0x00`)与 用户名/密码(`0x02`,RFC 1929)。
+- **认证** —— 无认证(`0x00`)与 用户名/密码(`0x02`,RFC 1929)。GSSAPI(`0x01`)
+  未实现(对 RFC 1928 §3 的有意偏离,几乎所有已部署实现均如此);完整合规审计见
+  [`docs/research/rfc-1928-1929-compliance.md`](docs/research/rfc-1928-1929-compliance.md)。
 - **地址类型** —— IPv4、IPv6 与 域名(`ATYP` `0x01` / `0x04` / `0x03`),CONNECT
   与 UDP 目标均在服务端做 DNS 解析。
 - **完整的 RFC 错误映射** —— 在适用场景下生成每个应答码 `0x00`–`0x08`(例如

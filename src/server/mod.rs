@@ -41,6 +41,10 @@ pub async fn run(
             accepted = listener.accept() => {
                 match accepted {
                     Ok((stream, peer)) => {
+                        // Nagle adds relay latency for request/response
+                        // traffic; disable it on the client leg (the upstream
+                        // leg does the same in connect.rs).
+                        let _ = stream.set_nodelay(true);
                         // Admit the connection at accept time, counting it (and
                         // any per-IP budget) for its whole lifetime. Over-limit
                         // connections are dropped now rather than after a

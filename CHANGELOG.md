@@ -5,6 +5,42 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.0] - 2026-07-07
+
+Performance release, driven by the project's first systematic benchmark pass
+(methodology and reference numbers in `docs/PERFORMANCE.md`). Benchmarks were
+run on a macOS laptop and cross-checked on a Debian 13 musl VM running the
+shipped static binary; numbers are loopback and indicative, not universal.
+
+### Changed
+
+- UDP relay: domain-name targets are resolved through a per-association DNS
+  cache (30 s TTL, 256-entry cap) instead of one blocking `getaddrinfo` per
+  datagram. The win scales with how slow the resolver is: at datagram-stream
+  saturation it is ~1.8× relayed throughput with a ~100× tail-latency drop
+  (36 ms → 0.4 ms) against a fast `/etc/hosts` resolver on Linux, and up to
+  ~12× against a slow system resolver; a domain resolved over the network
+  (a full DNS round trip per uncached datagram) benefits most. Resolution
+  failures are never cached; the egress policy is still enforced on every
+  datagram.
+- UDP relay: the per-datagram payload copy and reply re-encapsulation
+  allocation are gone (borrowed decap + a reused scratch buffer), and
+  IP-literal targets no longer pay a resolve-timeout timer.
+- TCP relay: per-direction copy buffers grew 16 KiB → 64 KiB, measured
+  **+15–25% bulk relay throughput** at 8 and 64 concurrent streams (256 KiB
+  regressed and was rejected). Idle connections do not keep buffer pages
+  resident, so the memory cost applies only while a connection is actively
+  relaying.
+- TCP relay: `TCP_NODELAY` is now set on both legs (accepted client socket and
+  upstream dial), removing Nagle-induced stalls for request/response traffic
+  over real RTT paths, and the relay uses the lock-free borrowed stream split
+  instead of a mutex-per-poll generic split.
+
+### Added
+
+- `install.sh`: `--udp-port-range` and `--udp-advertise` flags generate the
+  matching `[udp]` config block for NAT/firewalled deployments.
+
 ## [0.4.0] - 2026-06-06
 
 ### Added

@@ -20,6 +20,10 @@ is hand-written; the dependency footprint is kept deliberately small.
 - **SOCKS5 commands** — `CONNECT` and `UDP ASSOCIATE` (RFC 1928). `BIND` is
   rejected with reply code `0x07` by design.
 - **Authentication** — No-Auth (`0x00`) and Username/Password (`0x02`, RFC 1929).
+  GSSAPI (`0x01`) is not implemented (a deliberate deviation from RFC 1928 §3,
+  shared by virtually all deployed implementations); see
+  [`docs/research/rfc-1928-1929-compliance.md`](docs/research/rfc-1928-1929-compliance.md)
+  for the full compliance audit.
 - **Address types** — IPv4, IPv6, and Domain (`ATYP` `0x01` / `0x04` / `0x03`),
   with server-side DNS resolution for both CONNECT and UDP targets.
 - **Full RFC error mapping** — every reply code `0x00`–`0x08` is produced where

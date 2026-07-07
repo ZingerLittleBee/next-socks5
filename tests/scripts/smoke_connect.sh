@@ -91,7 +91,16 @@ fi
 # Case 1: no-auth proxy, CONNECT should succeed.
 # ---------------------------------------------------------------------------
 echo "==> Case 1: no-auth CONNECT"
-start_proxy "$BIN" --no-tui --listen "127.0.0.1:$PORT"
+# The default [egress] policy blocks loopback destinations (SSRF guard), so a
+# smoke config must relax it for the local HTTP target. Test-only — never ship.
+NOAUTH_CONFIG="$TMP_DIR/noauth.toml"
+cat >"$NOAUTH_CONFIG" <<EOF
+listen = "127.0.0.1:$PORT"
+
+[egress]
+block_loopback = false
+EOF
+start_proxy "$BIN" --no-tui --config "$NOAUTH_CONFIG"
 if curl --fail --silent --show-error \
         --socks5 "127.0.0.1:$PORT" "http://127.0.0.1:$HTTP_PORT/"; then
     pass "no-auth CONNECT succeeded"
@@ -107,6 +116,9 @@ echo "==> Case 2: password-auth CONNECT"
 CONFIG="$TMP_DIR/auth.toml"
 cat >"$CONFIG" <<EOF
 listen = "127.0.0.1:$PORT"
+
+[egress]
+block_loopback = false
 
 [auth]
 method = "password"
