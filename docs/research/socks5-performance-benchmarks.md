@@ -48,22 +48,57 @@ candidates below are things that profile **could not have seen** — they surfac
 concurrency, on real NICs, or on the unprofiled UDP path. Each comes with an experiment to
 confirm or refute; none should be "fixed" before its experiment shows a win.
 
-### A. Global registry `Mutex` on the per-chunk byte-count path — highest priority
+### A. Global registry `Mutex` on the per-chunk byte-count path — MEASURED 2026-07-07
 
-`CLAUDE.md` describes metrics as "atomic counters (hot path, per-byte)", but `add_up`/`add_down`
+`CLAUDE.md` described metrics as "atomic counters (hot path, per-byte)", but `add_up`/`add_down`
 also take the **global** `registry: Mutex<HashMap>` on every call
-(`src/metrics.rs:159-173`), and they are called once per relayed chunk from both relay
-directions (`src/server/connect.rs:298-299`) and per UDP datagram
-(`src/server/udp.rs:205`, `:218`). At 2 GB/s in 16 KiB chunks that is ~128k global lock
-acquisitions/s; with hundreds of concurrent bulk streams every relay task serializes on one
-mutex. The reference profile ran only 8 streams — far too few for this to show as `futex` time.
+(`src/metrics.rs:159-173`), once per relayed chunk from both relay directions
+(`src/server/connect.rs:298-299`) and per UDP datagram (`src/server/udp.rs:205`, `:218`).
 
-- **Experiment:** re-run the throughput bench sweeping stream count 8 → 64 → 256. If aggregate
-  throughput stops scaling and `perf` starts showing `futex`/`__lll_lock_wait`, confirmed.
-  A/B against a build where `add_up`/`add_down` skip the registry update.
-- **Fix direction (if confirmed):** hand each relay an `Arc<(AtomicU64, AtomicU64)>` at
-  `register()` time; the registry holds the same `Arc` and `connections()` reads the atomics.
-  Hot path becomes two relaxed atomic adds, zero locks.
+**Experiment 1 — contention micro-benchmark (10-core Apple M-series, rustc 1.93, `-O`).**
+Threads hammer `add_up` on distinct connection ids, current design (atomics + `Mutex<HashMap>`
+update) vs. the "obvious fix" (per-connection `Arc<AtomicU64>` + shared global atomic):
+
+| threads | current (Mops/s) | per-conn atomics (Mops/s) |
+| --- | --- | --- |
+| 1 | 71.9 | 457.5 |
+| 4 | 21.3 | 26.5 |
+| 8 | 26.2 | 17.4 |
+| 16 | 26.2 | 18.1 |
+
+**Verdict: REFUTED as a throughput bottleneck.** The mutex does serialize (negative scaling
+1→4 threads), but even fully contended it sustains ~26 M ops/s, while the relay at 2 GB/s in
+16 KiB chunks generates only ~128 **k** ops/s — a ~200× margin. Two further lessons:
+(a) the per-chunk work between calls (a read+write syscall pair) makes real contention far
+lower than the zero-work loop above; (b) the "obvious fix" is *worse* under heavy contention —
+the shared global `AtomicU64` cache-line ping-pong costs more than parked mutex waiters. Any
+future fix must shard the global counters too, and only after a workload shows ≥ Mops/s rates
+(e.g. tiny-chunk relays), which syscall cost makes unlikely.
+
+**Experiment 2 — the risk that IS real: `connections()` clone-under-lock.** The TUI/admin
+observer clones the whole registry under the same mutex every 250 ms
+(`src/metrics.rs:212-214`, sampled by the 250 ms tick). Measured clone time
+(same host, `String` fields populated):
+
+| registry size | clone under lock |
+| --- | --- |
+| 1k conns | 0.07 ms |
+| 10k conns | 0.72 ms |
+| 100k conns | 8.7 ms |
+| 250k conns | 25.8 ms |
+
+At the 250k-connection scale `docs/PERFORMANCE.md` reports as stable, an attached TUI/admin
+holds the lock ~26 ms, 4×/s. `add_up` uses a **blocking** `std::sync::Mutex` on tokio worker
+threads, so during each clone every relay task that touches metrics parks its worker thread —
+with enough relays this stalls the whole runtime for the clone duration (a periodic p99 latency
+spike, observer-induced). Headless with no admin client attached, nothing calls
+`connections()`, so there is no effect.
+
+- **Fix direction (revised):** per-connection `Arc<(AtomicU64, AtomicU64)>` still helps, but
+  the justification is removing relays from the observer's lock (not throughput): `add_up`
+  becomes lock-free, and `connections()` can clone without stalling relays. Keep the global
+  counters as single atomics (fine at realistic call rates per Experiment 1).
+- **Priority: low-medium** — only manifests with an observer attached at ≥ ~50k connections.
 
 ### B. `tokio::io::split` locks on every poll; `TcpStream::split` is free
 
@@ -75,9 +110,9 @@ split tokio documents as "more efficient than `into_split`"
 (`tokio-1.52.3/src/net/tcp/stream.rs:1408`) — it needs no lock because the halves borrow the
 stream. Cost today: 2 streams × 2 lock ops per chunk on top of finding A.
 
-- **Experiment:** swap to `client.split()` / `upstream.split()` (drop-in for this code shape)
-  and A/B the multi-stream throughput bench. Uncontended mutexes are cheap, so expect a small
-  single-digit % win at most — but it is free to take.
+- **Status: applied 2026-07-07** — swapped to `client.split()` / `upstream.split()` (drop-in
+  for this code shape); full test suite passes. Uncontended mutexes are cheap, so the win is
+  small single-digit % at most — but it was free to take.
 
 ### C. `TCP_NODELAY` is never set
 
@@ -87,10 +122,10 @@ up Nagle/delayed-ACK stalls (classically up to ~40 ms per stall on WAN paths; in
 loopback where RTT ≈ 0). Every mainstream proxy (HAProxy, Envoy, nginx stream) sets NODELAY on
 relay sockets.
 
-- **Experiment:** `stream.set_nodelay(true)` on both the accepted socket
-  (`src/server/mod.rs`, post-accept) and the upstream (`src/server/connect.rs:68-90`,
-  post-connect), then measure small-object latency percentiles across a real (non-loopback)
-  RTT path. Loopback runs will show ~nothing; a WAN/ LAN path is required.
+- **Status: applied 2026-07-07** — `set_nodelay(true)` on the accepted socket
+  (`src/server/mod.rs`, post-accept) and the upstream (`src/server/connect.rs`, post-connect);
+  full test suite passes. The latency win is only measurable across a real (non-loopback) RTT
+  path — validating it belongs to the two-host bench run.
 - Also affects the SOCKS reply itself: the success reply (`connect.rs:100-103`) is a 10-byte
   write that Nagle may delay if it coalesces with relay traffic.
 
@@ -146,10 +181,10 @@ accept task while others idle) — on current evidence the kernel saturates firs
 | # | Item | Type | Expected impact | Effort |
 | --- | --- | --- | --- | --- |
 | 1 | UDP bench tool + first-ever UDP numbers | harness | unlocks E entirely | S |
-| 2 | Metrics registry mutex → per-conn atomics (A) | code, after experiment | high at high concurrency | S |
+| 2 | ~~Metrics mutex as throughput bottleneck~~ **refuted by experiment**; remaining issue is observer clone-under-lock stalls (A, Experiment 2) | code, if TUI/admin used at ≥50k conns | low-medium | S |
 | 3 | Buffer-size sweep + concurrent-capacity ramp (D + §7.5) | harness + tuning | medium | S |
-| 4 | `TCP_NODELAY` on both relay sockets (C) | code | high for WAN request/response latency | XS |
-| 5 | `TcpStream::split` instead of `tokio::io::split` (B) | code | small, free | XS |
+| 4 | ~~`TCP_NODELAY` on both relay sockets (C)~~ **done 2026-07-07** (WAN validation pending) | code | high for WAN request/response latency | — |
+| 5 | ~~`TcpStream::split` instead of `tokio::io::split` (B)~~ **done 2026-07-07** | code | small, free | — |
 | 6 | UDP DNS cache + encap buffer reuse (E) | code, after #1 | high for domain-target UDP | S |
 | 7 | Latency-under-load mode (§7.4) | harness | measurement fidelity | S |
 | 8 | `SO_REUSEPORT` multi-accept (F) | code | unknown until two-host test | M |
