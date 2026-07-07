@@ -5,6 +5,58 @@ All notable changes to this project are documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Performance release, driven by the project's first systematic benchmark pass
+(methodology, tools, and reference numbers in `docs/PERFORMANCE.md`; the full
+findings in `docs/research/socks5-performance-benchmarks.md`). All numbers
+below are from a 10-core loopback host — indicative, not universal.
+
+### Changed
+
+- UDP relay: domain-name targets are resolved through a per-association DNS
+  cache (30 s TTL, 256-entry cap) instead of one blocking `getaddrinfo` per
+  datagram — measured **12× relayed throughput** for domain targets
+  (~5k → ~60k datagrams/s, now matching IP literals) and tail latency down
+  from tens of milliseconds to ~1 ms even at light load. Resolution failures
+  are never cached; the egress policy is still enforced on every datagram.
+- UDP relay: the per-datagram payload copy and reply re-encapsulation
+  allocation are gone (borrowed decap + a reused scratch buffer), and
+  IP-literal targets no longer pay a resolve-timeout timer.
+- TCP relay: per-direction copy buffers grew 16 KiB → 64 KiB, measured
+  **+15–25% bulk relay throughput** at 8 and 64 concurrent streams (256 KiB
+  regressed and was rejected). Idle connections do not keep buffer pages
+  resident, so the memory cost applies only while a connection is actively
+  relaying.
+- TCP relay: `TCP_NODELAY` is now set on both legs (accepted client socket and
+  upstream dial), removing Nagle-induced stalls for request/response traffic
+  over real RTT paths, and the relay uses the lock-free borrowed stream split
+  instead of a mutex-per-poll generic split.
+
+### Added
+
+- `tests/scripts/socks5_udp.go`: a stdlib-only UDP ASSOCIATE load client (and
+  UDP echo sink) reporting pps, goodput, drop rate, and RTT percentiles, with
+  paced/unpaced modes and optional ATYP=3 domain encapsulation.
+- `tests/scripts/socks5_cps.go` grew `-mode thr` (bulk relay throughput against
+  a `-blast` sink) and `-mode hold` (ramp-and-hold concurrent-capacity testing,
+  RFC 9411 §7.5 style).
+- An RFC 1928 / RFC 1929 compliance audit
+  (`docs/research/rfc-1928-1929-compliance.md`): every server-side MUST is met;
+  the deliberate deviations (GSSAPI, BIND, optional UDP fragmentation) are now
+  documented in the README.
+- `install.sh`: `--udp-port-range` and `--udp-advertise` flags generate the
+  matching `[udp]` config block for NAT/firewalled deployments.
+- A terminal-styled project landing page (`landing/`, Astro), deployed via
+  Cloudflare Workers.
+
+### Fixed
+
+- The smoke-test scripts (`smoke_connect.sh`, `smoke_udp.sh`) had been silently
+  broken since egress filtering became secure-by-default (their loopback
+  targets were blocked); they now run the proxy with a test-only
+  egress-relaxed config, mirroring `bench.sh`.
+
 ## [0.4.0] - 2026-06-06
 
 ### Added
