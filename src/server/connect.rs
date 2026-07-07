@@ -90,6 +90,9 @@ pub async fn run(
     };
 
     let mut upstream = upstream;
+    // Nagle adds relay latency for request/response traffic; proxies
+    // conventionally disable it on both legs.
+    let _ = upstream.set_nodelay(true);
 
     // 4. Reply success with the upstream's local address as BND.
     let bind = upstream
@@ -211,8 +214,10 @@ async fn copy_bidirectional_counted(
     metrics: &Metrics,
     id: u64,
 ) -> std::io::Result<()> {
-    let (mut client_rd, mut client_wr) = tokio::io::split(client);
-    let (mut upstream_rd, mut upstream_wr) = tokio::io::split(upstream);
+    // TcpStream::split is the lock-free borrowed split; the generic
+    // tokio::io::split would take a Mutex on every poll.
+    let (mut client_rd, mut client_wr) = client.split();
+    let (mut upstream_rd, mut upstream_wr) = upstream.split();
 
     // Shared across both directions; updated on every successful relayed write.
     let last_activity = Mutex::new(Instant::now());
