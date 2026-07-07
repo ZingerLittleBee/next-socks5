@@ -145,6 +145,13 @@ throughput/memory trade with two ends:
 
 Run both experiments together — the ramp test tells you what the sweep costs.
 
+**Status: measured & applied 2026-07-07** — the sweep (8/16/64/256 KiB, `-mode thr`) found
+64 KiB ~15–25% faster than 16 KiB at 8 and 64 streams, with 256 KiB regressing at low
+concurrency; the default is now 64 KiB (`src/server/connect.rs`). The memory fear did not
+materialize: `-mode hold` at 8k idle connections showed ~22 KB RSS/conn — buffer pages become
+resident only when traffic writes them. Numbers and caveats in `docs/PERFORMANCE.md`
+("Relay buffer size").
+
 ### E. UDP relay path: per-datagram allocations and uncached DNS
 
 The UDP loop does meaningful userspace work per datagram, none of it profiled yet:
@@ -188,7 +195,7 @@ accept task while others idle) — on current evidence the kernel saturates firs
 | --- | --- | --- | --- | --- |
 | 1 | ~~UDP bench tool + first-ever UDP numbers~~ **done 2026-07-07** (`socks5_udp.go`; ~60k pps lossless knee, per-datagram-overhead-bound — see `docs/PERFORMANCE.md`) | harness | unlocks E entirely | — |
 | 2 | ~~Metrics mutex as throughput bottleneck~~ **refuted by experiment**; remaining issue is observer clone-under-lock stalls (A, Experiment 2) | code, if TUI/admin used at ≥50k conns | low-medium | S |
-| 3 | Buffer-size sweep + concurrent-capacity ramp (D + §7.5) | harness + tuning | medium | S |
+| 3 | ~~Buffer-size sweep + concurrent-capacity ramp (D + §7.5)~~ **done 2026-07-07** (64 KiB default, +15–25%; `-mode thr`/`-mode hold` added) | harness + tuning | medium | — |
 | 4 | ~~`TCP_NODELAY` on both relay sockets (C)~~ **done 2026-07-07** (WAN validation pending) | code | high for WAN request/response latency | — |
 | 5 | ~~`TcpStream::split` instead of `tokio::io::split` (B)~~ **done 2026-07-07** | code | small, free | — |
 | 6 | ~~UDP DNS cache + encap buffer reuse (E)~~ **done 2026-07-07** (12× domain-target pps; see `docs/PERFORMANCE.md`) | code | high for domain-target UDP | — |

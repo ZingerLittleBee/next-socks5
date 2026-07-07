@@ -29,7 +29,7 @@ Two zero-/low-dependency tools live under `tests/scripts/`:
 | Tool | Role | Notes |
 | --- | --- | --- |
 | [`bench.sh`](../tests/scripts/bench.sh) | Single-host sanity bench (throughput + latency + CPS, no-auth and password) | bash + `curl` + `python3` only. `curl` is the only mainstream tool with native SOCKS5, but it spawns a process per request, so its CPS is understated. |
-| [`socks5_cps.go`](../tests/scripts/socks5_cps.go) | Accurate CPS load client (and a TCP sink) | Pure Go stdlib. Each worker does a full RFC 1928 (+ RFC 1929) handshake and `CONNECT` in-process, so it measures real CPS and handshake-latency percentiles that `curl` cannot. |
+| [`socks5_cps.go`](../tests/scripts/socks5_cps.go) | Accurate CPS load client (and a TCP sink) | Pure Go stdlib. `-mode cps` (default): each worker does a full RFC 1928 (+ RFC 1929) handshake and `CONNECT` in-process, measuring real CPS and handshake-latency percentiles that `curl` cannot. `-mode thr` + a `-blast` sink: long-lived bulk streams for relay-throughput sweeps. `-mode hold`: ramp-and-hold N idle connections (RFC 9411 §7.5 style) while you watch the proxy's RSS/fds. |
 | [`socks5_udp.go`](../tests/scripts/socks5_udp.go) | UDP ASSOCIATE load client (and a UDP echo sink) | Pure Go stdlib. Each worker holds one association and sends SOCKS5-encapsulated datagrams through the relay to an echo sink; reports pps, echoed goodput, drop rate, and RTT percentiles. The echo path exercises both relay directions. |
 
 ### Step 1 — Single host (quick sanity check)
@@ -127,6 +127,40 @@ A cross-provider pair (DUT = 1 vCPU / 960 MB Debian 12; load = the 4-core host;
 The takeaway reinforces Step 3: a high-RTT, cross-provider, single-core pair is
 structurally incapable of stressing the proxy. Use same-datacenter, low-RTT,
 multi-core hosts.
+
+## Relay buffer size (swept 2026-07-07)
+
+The TCP relay copies through one fixed buffer per direction. A sweep of
+8/16/64/256 KiB on a 10-core Apple M-series loopback host (`-mode thr` against
+a `-blast` sink, 10 s runs, repeated):
+
+| Buffer | c=8 aggregate | c=64 aggregate |
+| --- | --- | --- |
+| 8 KiB | 1296 MB/s | 960 MB/s |
+| 16 KiB (old default) | 1373–1519 MB/s | 1060 MB/s |
+| **64 KiB (default since 2026-07-07)** | **1664–1780 MB/s** | **1155 MB/s** |
+| 256 KiB | 1313 MB/s | 1123 MB/s |
+
+64 KiB is ~15–25% faster than 16 KiB at both stream counts; 256 KiB regresses
+at low concurrency (cache pressure). The memory side of the trade turned out
+to be mild: a ramp-and-hold of 8k **idle** connections (`-mode hold`) showed
+~22 KB RSS per connection with 64 KiB buffers — the buffer pages only become
+resident once traffic actually writes them, so the worst case (~128 KiB/conn)
+applies only to connections actively relaying, whose count is bounded by the
+NIC long before memory. Note both measurements are macOS loopback; re-verify
+the sweep on the Linux two-host setup before treating the +20% as universal.
+
+### Concurrent-capacity ramp (how to)
+
+```sh
+/tmp/socks5_cps -sink 127.0.0.1:19092 &          # drain sink
+/tmp/socks5_cps -mode hold -target 127.0.0.1:19092 -c 10000 -d 30s
+# meanwhile: ps -o rss= -p <proxy pid>
+```
+
+Caveat learned the hard way: back-to-back ramps on one host exhaust ephemeral
+ports into TIME_WAIT — cool down ~45 s between runs or the next ramp reports
+thousands of dial failures that have nothing to do with the proxy.
 
 ## UDP ASSOCIATE (first measurement, 2026-07-07)
 
