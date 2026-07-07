@@ -22,14 +22,26 @@ pub enum UdpError {
     Addr(AddrError),
 }
 
+/// A decapsulated SOCKS5 UDP datagram whose payload borrows the input buffer
+/// (the relay hot path uses this to avoid a per-datagram copy).
+#[derive(Debug, PartialEq, Eq)]
+pub struct UdpDatagramRef<'a> {
+    /// Fragment number, returned as-is (caller decides to drop FRAG != 0).
+    pub frag: u8,
+    /// Destination address (DST.ADDR + DST.PORT).
+    pub address: Address,
+    /// Application payload following the address, borrowed from the input.
+    pub data: &'a [u8],
+}
+
 // RSV(2) + FRAG(1) + ATYP(1): the minimum bytes before address parsing.
 const MIN_HEADER: usize = 4;
 
-/// Parse a SOCKS5 UDP datagram.
+/// Parse a SOCKS5 UDP datagram, borrowing the payload from `buf`.
 ///
 /// FRAG is returned as-is so the caller can decide to drop fragmented
 /// datagrams (FRAG != 0).
-pub fn decap(buf: &[u8]) -> Result<UdpDatagram, UdpError> {
+pub fn decap_ref(buf: &[u8]) -> Result<UdpDatagramRef<'_>, UdpError> {
     if buf.len() < MIN_HEADER {
         return Err(UdpError::Truncated);
     }
@@ -37,11 +49,20 @@ pub fn decap(buf: &[u8]) -> Result<UdpDatagram, UdpError> {
     let frag = buf[2];
     // From byte 3 onward (ATYP + address + port) is parsed by Address::decode.
     let (address, consumed) = Address::decode(&buf[3..]).map_err(UdpError::Addr)?;
-    let data = buf[3 + consumed..].to_vec();
-    Ok(UdpDatagram {
+    Ok(UdpDatagramRef {
         frag,
         address,
-        data,
+        data: &buf[3 + consumed..],
+    })
+}
+
+/// Parse a SOCKS5 UDP datagram into an owned [`UdpDatagram`].
+pub fn decap(buf: &[u8]) -> Result<UdpDatagram, UdpError> {
+    let d = decap_ref(buf)?;
+    Ok(UdpDatagram {
+        frag: d.frag,
+        address: d.address,
+        data: d.data.to_vec(),
     })
 }
 
@@ -105,6 +126,19 @@ mod tests {
         let mut buf = Vec::new();
         encap(&addr, b"", &mut buf);
         assert_eq!(&buf[..3], &[0x00, 0x00, 0x00]);
+    }
+
+    #[test]
+    fn decap_ref_borrows_payload() {
+        let addr = Address::Domain("example.com".to_owned(), 53);
+        let mut buf = Vec::new();
+        encap(&addr, b"hello", &mut buf);
+        let dg = decap_ref(&buf).unwrap();
+        assert_eq!(dg.frag, 0);
+        assert_eq!(dg.address, addr);
+        assert_eq!(dg.data, b"hello");
+        // The payload is a view into the input buffer, not a copy.
+        assert_eq!(dg.data.as_ptr(), buf[buf.len() - 5..].as_ptr());
     }
 
     #[test]
