@@ -23,12 +23,52 @@ pub struct Config {
     /// UDP relay transport/addressing configuration.
     #[serde(default)]
     pub udp: UdpConfig,
+    /// DNS upstreams. An empty list inherits the system configuration.
+    #[serde(default)]
+    pub dns: DnsConfig,
     /// Admin/attach endpoint settings.
     #[serde(default)]
     pub admin: AdminConfig,
     /// Egress (destination) policy guarding against SSRF / open-relay abuse.
     #[serde(default)]
     pub egress: Egress,
+}
+
+/// DNS settings shared by CONNECT, UDP targets, and UDP advertise lookups.
+#[derive(Debug, Clone, Default, serde::Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct DnsConfig {
+    /// Literal IP addresses with an optional port (defaults to 53).
+    #[serde(default, deserialize_with = "deserialize_dns_servers")]
+    pub servers: Vec<std::net::SocketAddr>,
+}
+
+fn deserialize_dns_servers<'de, D>(deserializer: D) -> Result<Vec<std::net::SocketAddr>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::Deserialize;
+    Vec::<String>::deserialize(deserializer)?
+        .into_iter()
+        .map(|value| {
+            let address = value
+                .parse::<std::net::IpAddr>()
+                .map(|ip| std::net::SocketAddr::new(ip, 53))
+                .or_else(|_| value.parse::<std::net::SocketAddr>())
+                .map_err(|_| serde::de::Error::custom(format!("invalid DNS server: {value}")))?;
+            if matches!(address, std::net::SocketAddr::V6(address) if address.scope_id() != 0) {
+                return Err(serde::de::Error::custom(
+                    "scoped IPv6 DNS servers are not supported",
+                ));
+            }
+            if address.port() == 0 || address.ip().is_unspecified() || address.ip().is_multicast() {
+                return Err(serde::de::Error::custom(format!(
+                    "invalid DNS server: {value}"
+                )));
+            }
+            Ok(address)
+        })
+        .collect()
 }
 
 /// Admin/attach (local Unix socket) configuration.
@@ -447,6 +487,7 @@ impl Config {
             timeouts: Timeouts::default(),
             limits: Limits::default(),
             udp: UdpConfig::default(),
+            dns: DnsConfig::default(),
             admin: AdminConfig::default(),
             egress: Egress::default(),
         }
@@ -626,7 +667,12 @@ max_connections = 1024
     fn egress_default_allows_public_destinations() {
         use std::net::IpAddr;
         let e = Egress::default();
-        for s in ["8.8.8.8", "1.1.1.1", "93.184.216.34", "2001:4860:4860::8888"] {
+        for s in [
+            "8.8.8.8",
+            "1.1.1.1",
+            "93.184.216.34",
+            "2001:4860:4860::8888",
+        ] {
             let ip: IpAddr = s.parse().unwrap();
             assert!(!e.is_blocked(ip), "{s} should be allowed by default");
         }
@@ -646,7 +692,10 @@ max_connections = 1024
     fn port_range_parses_valid() {
         assert_eq!(
             PortRange::parse("40000-40100"),
-            Ok(PortRange { start: 40000, end: 40100 })
+            Ok(PortRange {
+                start: 40000,
+                end: 40100
+            })
         );
     }
 
@@ -654,7 +703,10 @@ max_connections = 1024
     fn port_range_allows_single_port() {
         assert_eq!(
             PortRange::parse("40000-40000"),
-            Ok(PortRange { start: 40000, end: 40000 })
+            Ok(PortRange {
+                start: 40000,
+                end: 40000
+            })
         );
     }
 
@@ -674,7 +726,10 @@ max_connections = 1024
         .expect("should parse");
         assert_eq!(
             cfg.udp.port_range,
-            Some(PortRange { start: 40000, end: 40100 })
+            Some(PortRange {
+                start: 40000,
+                end: 40100
+            })
         );
         assert_eq!(
             cfg.udp.advertise,

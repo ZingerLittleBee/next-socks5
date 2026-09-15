@@ -15,9 +15,9 @@ use tokio::sync::{broadcast, watch};
 use next_socks5::admin;
 use next_socks5::config::{AuthMethod, Cli, Command, Config, DEFAULT_ADMIN_SOCKET};
 use next_socks5::metrics::{format_event, Event, Metrics};
-use next_socks5::{mock, server};
 #[cfg(feature = "tui")]
 use next_socks5::tui;
+use next_socks5::{mock, server};
 
 /// Bound on how long we wait for in-flight connections to drain on shutdown.
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
@@ -72,6 +72,14 @@ async fn main() {
         }
     };
 
+    let resolver = match next_socks5::dns::DnsResolver::new(&cfg.dns) {
+        Ok(resolver) => Arc::new(resolver),
+        Err(error) => {
+            eprintln!("DNS configuration error: {error}");
+            std::process::exit(1);
+        }
+    };
+
     // 2. Build shared state: metrics, the event bus, and the shutdown channel.
     let metrics = Metrics::new();
     let (events_tx, events_rx) = broadcast::channel::<Event>(1024);
@@ -96,12 +104,13 @@ async fn main() {
     };
 
     // 4. Spawn the server accept loop.
-    let server_handle = tokio::spawn(server::run(
+    let server_handle = tokio::spawn(server::run_with_resolver(
         listener,
         cfg.clone(),
         metrics.clone(),
         events_tx.clone(),
         shutdown_rx.clone(),
+        resolver,
     ));
 
     // 4b. Start the admin/attach endpoint unless disabled. Failures here are

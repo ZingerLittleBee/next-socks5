@@ -11,6 +11,7 @@ use tokio::net::TcpListener;
 use tokio::sync::{broadcast, watch};
 
 use crate::config::Config;
+use crate::dns::DnsResolver;
 use crate::metrics::{Event, Metrics};
 
 use admission::Admission;
@@ -27,7 +28,20 @@ pub async fn run(
     cfg: Arc<Config>,
     metrics: Arc<Metrics>,
     events: broadcast::Sender<Event>,
+    shutdown: watch::Receiver<bool>,
+) -> std::io::Result<()> {
+    let resolver = Arc::new(DnsResolver::new(&cfg.dns)?);
+    run_with_resolver(listener, cfg, metrics, events, shutdown, resolver).await
+}
+
+/// Run with a resolver initialized before the CLI announces startup.
+pub async fn run_with_resolver(
+    listener: TcpListener,
+    cfg: Arc<Config>,
+    metrics: Arc<Metrics>,
+    events: broadcast::Sender<Event>,
     mut shutdown: watch::Receiver<bool>,
+    resolver: Arc<DnsResolver>,
 ) -> std::io::Result<()> {
     // JoinSet tracks spawned connection tasks so shutdown can drain them.
     let mut tasks = tokio::task::JoinSet::new();
@@ -62,8 +76,9 @@ pub async fn run(
                         let metrics = metrics.clone();
                         let events = events.clone();
                         let shutdown = shutdown.clone();
+                        let resolver = resolver.clone();
                         tasks.spawn(connection::handle(
-                            stream, peer, cfg, metrics, events, shutdown, permit,
+                            stream, peer, cfg, metrics, events, shutdown, permit, resolver,
                         ));
                     }
                     Err(e) => {

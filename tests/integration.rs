@@ -48,6 +48,7 @@ fn no_auth_config() -> Config {
         timeouts: Timeouts::default(),
         limits: Limits::default(),
         udp: Default::default(),
+        dns: Default::default(),
         admin: Default::default(),
         // Tests relay to loopback echo servers; allow it.
         egress: Egress::permissive(),
@@ -373,7 +374,10 @@ async fn udp_bnd_port_within_configured_range() {
         };
 
         let mut cfg = no_auth_config();
-        cfg.udp.port_range = Some(next_socks5::config::PortRange { start: 41000, end: 41050 });
+        cfg.udp.port_range = Some(next_socks5::config::PortRange {
+            start: 41000,
+            end: 41050,
+        });
         let proxy_addr = start_server_with_config(cfg).await;
 
         let mut control = TcpStream::connect(proxy_addr).await.unwrap();
@@ -430,6 +434,7 @@ fn password_config() -> Config {
         timeouts: Timeouts::default(),
         limits: Limits::default(),
         udp: Default::default(),
+        dns: Default::default(),
         admin: Default::default(),
         // Tests relay to loopback echo servers; allow it.
         egress: Egress::permissive(),

@@ -42,6 +42,7 @@ pub async fn handle(
     events: broadcast::Sender<Event>,
     shutdown: watch::Receiver<bool>,
     _permit: Permit,
+    resolver: Arc<crate::dns::DnsResolver>,
 ) {
     // The entire pre-relay negotiation (greeting, optional auth, request) is
     // bounded by a single deadline so a slow/stalled client cannot pin this
@@ -69,13 +70,14 @@ pub async fn handle(
                 events,
                 peer,
                 shutdown,
+                resolver,
             )
             .await;
         }
         Command::UdpAssociate => {
             // The TCP stream becomes the control connection that owns the UDP
             // association; the relay runs until the control connection closes.
-            super::udp::run(stream, peer, cfg, metrics, events, shutdown).await;
+            super::udp::run(stream, peer, cfg, metrics, events, shutdown, resolver).await;
         }
         Command::Bind => {
             // BIND is intentionally unsupported per the project spec.

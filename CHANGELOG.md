@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Optional `[dns].servers` overrides for DNS server IP addresses and ports.
+  Empty or omitted configuration uses system DNS servers, and `/etc/hosts`
+  remains supported. No public DNS fallback is enabled automatically.
+- DNS diagnostics retain timeout, empty-result, and resolver-error details
+  together with elapsed time. UDP target lookup error logs are limited to one
+  per second per association.
+
+### Changed
+
+- TCP CONNECT, UDP targets, and UDP advertise names now use a shared
+  asynchronous Hickory resolver. Its bounded caches follow DNS record TTLs,
+  replacing the UDP relay's separate fixed 30-second cache. DNS configuration
+  errors are reported before the CLI server opens its listen port.
+- **Breaking Rust API change:** `Config` gains a `dns` field. Downstream Rust
+  callers using complete struct literals must add `dns: Default::default()`
+  or supply a DNS configuration. Existing TOML configurations remain valid.
+
+### Fixed
+
+- Preserve TCP A or AAAA answers when the other address-family query fails,
+  addressing a failure scenario reproduced while investigating #13. Query both
+  families while connecting so later answers remain eligible after an earlier
+  connection attempt fails or earlier answers are blocked by the egress policy.
+- Try additional permitted TCP addresses after connection failure, checking
+  every candidate against the egress policy. DNS and all dial attempts share
+  the configured `connect_ms` budget. Connection time is shared only with
+  permitted addresses already returned by DNS; a pending query does not shorten
+  the time available to the only known address.
+- Query only the relay socket's address family for UDP targets and advertise
+  names, avoiding unusable answers from the other family.
+
 ## [0.6.0] - 2026-08-11
 
 ### Added

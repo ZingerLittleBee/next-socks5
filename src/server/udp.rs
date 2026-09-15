@@ -5,10 +5,11 @@
 //! reply, then relays datagrams between the client and arbitrary targets until
 //! the control connection closes or the association goes idle.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashSet, VecDeque};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+use tokio::time::Instant;
 
 use tokio::io::AsyncReadExt;
 use tokio::io::AsyncWriteExt;
@@ -29,73 +30,12 @@ const UDP_SEND_TIMEOUT: Duration = Duration::from_secs(1);
 /// Maximum size of a single UDP datagram we are willing to buffer (64 KiB).
 const UDP_BUF: usize = 65536;
 
-/// How long a resolved domain target stays cached. `lookup_host` does not
-/// expose real record TTLs, so this is a conservative fixed window.
-const DNS_CACHE_TTL: Duration = Duration::from_secs(30);
-
-/// Maximum cached domain resolutions per association, so a client spraying
-/// many distinct hostnames cannot grow the cache without bound.
-const DNS_CACHE_CAP: usize = 256;
-
-/// Bounded, TTL-based cache of resolved domain targets, so a client streaming
-/// datagrams to the same hostname does not pay a resolver round trip (a
-/// `spawn_blocking` `getaddrinfo` call) per datagram.
-///
-/// Insertion-order eviction once `cap` is reached. `order` may briefly hold
-/// duplicate keys when an expired entry is re-inserted; eviction tolerates
-/// that (a popped key no longer in `map` is skipped), at worst evicting a
-/// fresh entry slightly early.
-struct DnsCache {
-    map: HashMap<String, (IpAddr, Instant)>,
-    order: VecDeque<String>,
-    cap: usize,
-    ttl: Duration,
-}
-
-impl DnsCache {
-    fn new(cap: usize, ttl: Duration) -> Self {
-        Self {
-            map: HashMap::new(),
-            order: VecDeque::new(),
-            cap: cap.max(1),
-            ttl,
-        }
-    }
-
-    /// Return the cached IP for `host` if present and fresh; expired entries
-    /// are removed on access.
-    fn get(&mut self, host: &str, now: Instant) -> Option<IpAddr> {
-        match self.map.get(host) {
-            Some((ip, at)) if now.duration_since(*at) < self.ttl => Some(*ip),
-            Some(_) => {
-                self.map.remove(host);
-                None
-            }
-            None => None,
-        }
-    }
-
-    fn insert(&mut self, host: String, ip: IpAddr, now: Instant) {
-        while self.map.len() >= self.cap {
-            match self.order.pop_front() {
-                // Skip keys already removed (expired or overwritten).
-                Some(old) => {
-                    self.map.remove(&old);
-                }
-                None => break,
-            }
-        }
-        if self.map.insert(host.clone(), (ip, now)).is_none() {
-            self.order.push_back(host);
-        }
-    }
-}
-
 /// Handle a UDP ASSOCIATE request that arrived on the TCP control connection.
 ///
 /// Binds a server-side UDP socket reachable by the client, replies on the
 /// control stream with the client-reachable BND.ADDR/PORT, then relays
 /// datagrams until the control connection closes or the UDP idle timeout fires.
+#[allow(clippy::too_many_arguments)]
 pub async fn run(
     mut control: TcpStream,
     client_peer: SocketAddr,
@@ -103,6 +43,7 @@ pub async fn run(
     metrics: Arc<Metrics>,
     events: broadcast::Sender<Event>,
     mut shutdown: watch::Receiver<bool>,
+    resolver: Arc<crate::dns::DnsResolver>,
 ) {
     // 1. Bind a per-association UDP relay socket on the control connection's
     //    local IP — a local interface the TCP handshake already succeeded on.
@@ -135,15 +76,15 @@ pub async fn run(
     // 2. Advertise BND.ADDR/PORT: the configured IP or per-association DNS
     //    result (for NAT/Docker), else the bound IP. The advertised PORT is
     //    always the real bound port — where the client sends its datagrams.
-    let advertise_ip = match resolve_advertise_ip(&cfg, bnd_local.ip()).await {
+    let advertise_ip = match resolve_advertise_ip(&cfg, bnd_local.ip(), &resolver).await {
         Ok(Some(ip)) => ip,
         Ok(None) => bnd_local.ip(),
-        Err(host) => {
+        Err(error) => {
             reply_failure(&mut control, Socks5Error::HostUnreachable).await;
             metrics.record_error(Socks5Error::HostUnreachable.reply_code());
             let _ = events.send(Event::Error {
                 code: Socks5Error::HostUnreachable.reply_code(),
-                msg: format!("could not resolve UDP advertise host {host}"),
+                msg: format!("could not resolve UDP advertise host: {error}"),
             });
             return;
         }
@@ -182,9 +123,10 @@ pub async fn run(
 
     // DNS for a domain target is bounded so a slow resolver cannot stall the
     // whole association (it shares this select loop with control-EOF detection),
-    // and cached so a datagram stream to one hostname resolves once per TTL.
+    // with shared, bounded caches that respect the DNS record TTL.
     let resolve_timeout = Duration::from_millis(cfg.timeouts.connect_ms);
-    let mut dns_cache = DnsCache::new(DNS_CACHE_CAP, DNS_CACHE_TTL);
+    // Limit error events per association to avoid a failing DNS packet flood.
+    let mut last_dns_error: Option<Instant> = None;
 
     // Optional outbound rate cap (datagrams/sec) via a 1-second fixed window.
     let rate_pps = cfg.limits.udp_rate_pps;
@@ -254,27 +196,23 @@ pub async fn run(
                         Address::V4(ip, port) => SocketAddr::new(IpAddr::V4(*ip), *port),
                         Address::V6(ip, port) => SocketAddr::new(IpAddr::V6(*ip), *port),
                         Address::Domain(host, port) => {
-                            let now = Instant::now();
-                            match dns_cache.get(host, now) {
-                                Some(ip) => SocketAddr::new(ip, *port),
-                                None => {
-                                    let resolved = tokio::time::timeout(
-                                        resolve_timeout,
-                                        tokio::net::lookup_host((host.as_str(), *port)),
-                                    )
-                                    .await;
-                                    match resolved {
-                                        Ok(Ok(mut it)) => match it.next() {
-                                            Some(sa) => {
-                                                dns_cache.insert(host.clone(), sa.ip(), now);
-                                                sa
-                                            }
-                                            None => continue,
-                                        },
-                                        // Unresolvable target or DNS too slow:
-                                        // drop the datagram (never cached).
-                                        _ => continue,
+                            match resolver.lookup(host, *port, Instant::now() + resolve_timeout, bind_ip.is_ipv4()).await {
+                                Ok(addresses) => match addresses.into_iter().find(|address| {
+                                    address.ip().is_ipv4() == bind_ip.is_ipv4() && !cfg.egress.is_blocked(address.ip())
+                                }) {
+                                    Some(address) => address,
+                                    None => continue,
+                                },
+                                Err(error) => {
+                                    let now = Instant::now();
+                                    if last_dns_error.is_none_or(|at| now.duration_since(at) >= Duration::from_secs(1)) {
+                                        let _ = events.send(Event::Error {
+                                            code: Socks5Error::HostUnreachable.reply_code(),
+                                            msg: format!("could not resolve UDP target {host}:{port}: {error}"),
+                                        });
+                                        last_dns_error = Some(now);
                                     }
+                                    continue;
                                 }
                             }
                         }
@@ -379,9 +317,7 @@ async fn bind_with_retry(
             Err(e) => match e.kind() {
                 // Port taken, or privileged (<1024 without CAP_NET_BIND_SERVICE):
                 // try the next candidate.
-                std::io::ErrorKind::AddrInUse | std::io::ErrorKind::PermissionDenied => {
-                    continue
-                }
+                std::io::ErrorKind::AddrInUse | std::io::ErrorKind::PermissionDenied => continue,
                 // Anything else (e.g. address not available) is fatal.
                 _ => return Err(e),
             },
@@ -405,23 +341,27 @@ async fn reply_failure(control: &mut TcpStream, error: Socks5Error) {
 /// names are resolved here, rather than at startup, so DDNS changes take effect
 /// without restarting the server. The result must match the relay socket's
 /// address family; advertising an address in another family would be unusable.
-async fn resolve_advertise_ip(cfg: &Config, bind_ip: IpAddr) -> Result<Option<IpAddr>, String> {
+async fn resolve_advertise_ip(
+    cfg: &Config,
+    bind_ip: IpAddr,
+    resolver: &crate::dns::DnsResolver,
+) -> Result<Option<IpAddr>, String> {
     match cfg.udp.advertise.as_ref() {
         None => Ok(None),
         Some(AdvertiseHost::Ip(ip)) if ip.is_unspecified() => Ok(None),
         Some(AdvertiseHost::Ip(ip)) => Ok(Some(*ip)),
         Some(AdvertiseHost::Domain(host)) => {
-            let timeout = Duration::from_millis(cfg.timeouts.connect_ms);
-            let resolved =
-                tokio::time::timeout(timeout, tokio::net::lookup_host((host.as_str(), 0)))
-                    .await
-                    .map_err(|_| host.clone())?
-                    .map_err(|_| host.clone())?;
-            let ip = resolved
-                .map(|addr| addr.ip().to_canonical())
+            let deadline = Instant::now() + Duration::from_millis(cfg.timeouts.connect_ms);
+            let addresses = resolver
+                .lookup(host, 0, deadline, bind_ip.is_ipv4())
+                .await
+                .map_err(|error| error.to_string())?;
+            addresses
+                .into_iter()
+                .map(|address| address.ip())
                 .find(|ip| !ip.is_unspecified() && ip.is_ipv4() == bind_ip.is_ipv4())
-                .ok_or_else(|| host.clone())?;
-            Ok(Some(ip))
+                .map(Some)
+                .ok_or_else(|| format!("{host}: no addresses matching the UDP socket family"))
         }
     }
 }
@@ -431,72 +371,5 @@ fn addr_from_socket(sa: SocketAddr) -> Address {
     match sa {
         SocketAddr::V4(v4) => Address::V4(*v4.ip(), v4.port()),
         SocketAddr::V6(v6) => Address::V6(*v6.ip(), v6.port()),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn ip(s: &str) -> IpAddr {
-        s.parse().unwrap()
-    }
-
-    #[test]
-    fn dns_cache_hit_within_ttl() {
-        let mut c = DnsCache::new(4, Duration::from_secs(30));
-        let t0 = Instant::now();
-        c.insert("example.com".into(), ip("93.184.216.34"), t0);
-        assert_eq!(
-            c.get("example.com", t0 + Duration::from_secs(29)),
-            Some(ip("93.184.216.34"))
-        );
-    }
-
-    #[test]
-    fn dns_cache_expires_after_ttl() {
-        let mut c = DnsCache::new(4, Duration::from_secs(30));
-        let t0 = Instant::now();
-        c.insert("example.com".into(), ip("93.184.216.34"), t0);
-        assert_eq!(c.get("example.com", t0 + Duration::from_secs(30)), None);
-        // The expired entry was removed on access, not just hidden.
-        assert!(c.map.is_empty());
-    }
-
-    #[test]
-    fn dns_cache_misses_unknown_host() {
-        let mut c = DnsCache::new(4, Duration::from_secs(30));
-        assert_eq!(c.get("nope.invalid", Instant::now()), None);
-    }
-
-    #[test]
-    fn dns_cache_evicts_oldest_at_cap() {
-        let mut c = DnsCache::new(2, Duration::from_secs(30));
-        let t0 = Instant::now();
-        c.insert("a.com".into(), ip("192.0.2.1"), t0);
-        c.insert("b.com".into(), ip("192.0.2.2"), t0);
-        c.insert("c.com".into(), ip("192.0.2.3"), t0);
-        assert_eq!(c.get("a.com", t0), None);
-        assert_eq!(c.get("b.com", t0), Some(ip("192.0.2.2")));
-        assert_eq!(c.get("c.com", t0), Some(ip("192.0.2.3")));
-        assert!(c.map.len() <= 2);
-    }
-
-    #[test]
-    fn dns_cache_reinsert_after_expiry_tolerates_duplicate_order_keys() {
-        let mut c = DnsCache::new(2, Duration::from_secs(30));
-        let t0 = Instant::now();
-        c.insert("a.com".into(), ip("192.0.2.1"), t0);
-        // Expire and re-insert the same host: `order` now holds "a.com" twice.
-        assert_eq!(c.get("a.com", t0 + Duration::from_secs(31)), None);
-        c.insert("a.com".into(), ip("192.0.2.9"), t0 + Duration::from_secs(31));
-        c.insert("b.com".into(), ip("192.0.2.2"), t0 + Duration::from_secs(31));
-        c.insert("c.com".into(), ip("192.0.2.3"), t0 + Duration::from_secs(31));
-        // Never exceeds the cap and stays consistent.
-        assert!(c.map.len() <= 2);
-        assert_eq!(
-            c.get("c.com", t0 + Duration::from_secs(31)),
-            Some(ip("192.0.2.3"))
-        );
     }
 }

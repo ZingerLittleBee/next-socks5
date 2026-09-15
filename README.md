@@ -26,6 +26,9 @@ is hand-written; the dependency footprint is kept deliberately small.
   for the full compliance audit.
 - **Address types** — IPv4, IPv6, and Domain (`ATYP` `0x01` / `0x04` / `0x03`),
   with server-side DNS resolution for both CONNECT and UDP targets.
+- **DNS** — asynchronous resolution with system or explicitly configured DNS
+  servers and `/etc/hosts` support. TCP queries IPv4 and IPv6 independently so
+  an error for one address family does not discard valid answers for the other.
 - **Full RFC error mapping** — every reply code `0x00`–`0x08` is produced where
   applicable (e.g. unknown command → `0x07`, unknown address type → `0x08`,
   connection limit → `0x02`, refused/unreachable/timeout mapped from the OS).
@@ -42,7 +45,7 @@ is hand-written; the dependency footprint is kept deliberately small.
   `max_connections` limit, half-open-aware relay, and graceful shutdown.
 - **Configuration** — TOML file with CLI overrides.
 - **Small & portable** — pure Rust, no C dependencies; ships as fully static
-  musl binaries and a ~3.5 MB `scratch`-based container image.
+  musl binaries and a `scratch`-based container image.
 
 ## Installation
 
@@ -228,9 +231,12 @@ password = "hunter2"
 
 [timeouts]
 handshake_ms = 10000       # greeting+auth+request deadline (anti-slowloris)
-connect_ms = 10000
+connect_ms = 10000         # total DNS + upstream connection budget
 tcp_idle_ms = 300000
 udp_idle_ms = 60000
+
+[dns]
+servers = []              # empty or omitted: use system DNS servers
 
 [limits]
 max_connections = 2048     # optional: global concurrent cap (unbounded if unset)
@@ -272,6 +278,63 @@ need to reach internal targets, relax it with an `[egress]` section — see
 [`config.example.toml`](config.example.toml). The pre-relay handshake is bounded by
 `timeouts.handshake_ms` (default 10s) to drop slowloris-style stalled clients.
 
+### DNS resolution
+
+TCP CONNECT, UDP targets, and `[udp].advertise` names share an asynchronous
+Hickory resolver. By default it reads the system's DNS server configuration
+and respects `/etc/hosts`. There is no automatic fallback to public DNS.
+To override the DNS servers, configure reachable resolver IP addresses:
+
+```toml
+[dns]
+# Examples only: replace these documentation addresses with your DNS servers.
+servers = ["192.0.2.53", "192.0.2.54:5353", "[2001:db8::53]:53"]
+```
+
+Each entry accepts a bare IPv4 or IPv6 address (port 53), `IPv4:port`, or
+`[IPv6]:port`. Scoped IPv6 server addresses such as `[fe80::1%2]:53` are not
+supported. An empty or omitted `servers` list uses the system DNS servers;
+explicit servers still respect `/etc/hosts`. Invalid DNS configuration prevents
+the CLI server from starting and is reported before it opens the listen port.
+
+For TCP, A and AAAA records are queried independently and concurrently. If one
+query fails but the other returns addresses, those answers remain available.
+Connection attempts begin as answers arrive while the other family's query
+continues. Later answers remain eligible if an earlier connection attempt fails
+or its addresses are blocked. Each candidate is checked against the egress
+policy before dialing, and connection failure advances to the next permitted
+address. DNS resolution and all connection attempts share one
+`timeouts.connect_ms` budget. Connection time is divided between the active
+attempt and permitted addresses already returned by DNS. If another permitted
+address arrives during a dial, the remaining time is shared with it. A pending
+DNS query alone does not shorten the connection time for the only available
+address. Pending work stops when a connection succeeds or the total budget
+expires.
+
+UDP target and advertise lookups query only the relay socket's address family.
+The resolver keeps a separate bounded cache for each family and follows DNS
+record TTLs; UDP does not add a separate fixed-duration cache.
+
+**Troubleshooting.** DNS failures include the elapsed time and distinguish
+timeouts, empty results, and resolver errors. UDP target lookup errors are
+logged at most once per second per association. Test from the same network
+environment as the proxy, using the same destination for both commands:
+
+```bash
+# Client resolves the destination.
+curl -v --socks5 127.0.0.1:1080 https://example.com
+# Proxy resolves the destination.
+curl -v --socks5-hostname 127.0.0.1:1080 https://example.com
+```
+
+Add your proxy credentials when authentication is enabled. If only proxy-side
+resolution fails, inspect `/etc/resolv.conf` where the proxy runs and query its
+configured server for A and AAAA separately. Compare UDP and TCP DNS queries
+to identify a missing listener or blocked port 53. An unreachable DNS stub
+still needs to be repaired or replaced with a reachable server in `[dns]`.
+In Docker bridge networking, `127.0.0.53` refers to the container itself, not
+the host's systemd-resolved service; check the container's DNS configuration.
+
 ### UDP relay & NAT / Docker
 
 `CONNECT` works over the single TCP listen port, but **UDP ASSOCIATE** uses a
@@ -302,8 +365,9 @@ advertise  = "socks.example.com"  # client-reachable public IP or DDNS name
   IP is not client-reachable (behind NAT, or Docker bridge networking). The
   advertised **port is always the real bound port**, so any NAT/forward must be
   **port-preserving (1:1)**. An unreachable advertised address is the #1 cause of
-  "TCP works but UDP doesn't". A DNS name is resolved for each new association,
-  and the resulting IP is returned to the client, so DDNS changes apply without
+  "TCP works but UDP doesn't". A DNS name is looked up for each new association,
+  using the shared resolver's TTL-aware cache, and the resulting IP is returned
+  to the client. DDNS changes apply after the cached record expires without
   restarting the server. Existing associations keep their original address.
   If resolution fails or yields no address matching the relay socket's address
   family, the association fails with `host unreachable` instead of advertising
