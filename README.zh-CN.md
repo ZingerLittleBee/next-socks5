@@ -24,6 +24,8 @@
   [`docs/research/rfc-1928-1929-compliance.md`](docs/research/rfc-1928-1929-compliance.md)。
 - **地址类型** —— IPv4、IPv6 与 域名(`ATYP` `0x01` / `0x04` / `0x03`),CONNECT
   与 UDP 目标均在服务端做 DNS 解析。
+- **DNS** —— 支持系统或自定义 DNS 服务器及 `/etc/hosts`。IPv4、IPv6 独立查询，
+  一类查询失败不会丢弃另一类的有效结果。
 - **完整的 RFC 错误映射** —— 在适用场景下生成每个应答码 `0x00`–`0x08`(例如
   未知命令 → `0x07`,未知地址类型 → `0x08`,连接数超限 → `0x02`,
   拒绝/不可达/超时 由操作系统错误映射而来)。
@@ -37,7 +39,7 @@
 - **健壮性** —— 连接 / TCP 空闲 / UDP 空闲 超时、可选的 `max_connections` 限制、
   支持半开连接的中继,以及优雅关闭。
 - **配置** —— TOML 配置文件,支持 CLI 覆盖。
-- **小巧、可移植** —— 纯 Rust,无 C 依赖;以完全静态的 musl 二进制和约 3.5 MB 的
+- **小巧、可移植** —— 纯 Rust,无 C 依赖;以完全静态的 musl 二进制和
   `scratch` 镜像发布。
 
 ## 安装
@@ -220,9 +222,12 @@ password = "hunter2"
 
 [timeouts]
 handshake_ms = 10000       # 问候+认证+请求 的截止时间(防 slowloris)
-connect_ms = 10000
+connect_ms = 10000         # DNS 解析与上游连接的总超时
 tcp_idle_ms = 300000
 udp_idle_ms = 60000
+
+[dns]
+servers = []              # 留空或省略时使用系统 DNS
 
 [limits]
 max_connections = 2048     # 可选:全局并发上限(不设则无限)
@@ -259,6 +264,40 @@ enabled = true             # 本地 attach 端点(默认开启)
 [`config.example.toml`](config.example.toml)。中继前的握手受 `timeouts.handshake_ms`
 (默认 10 秒)限制,以丢弃 slowloris 式的卡住客户端。
 
+### DNS 解析
+
+DNS 使用异步 Hickory 解析器，默认读取系统 DNS 配置和 `/etc/hosts`，按记录的 TTL
+缓存结果。需要自定义 DNS 时配置：
+
+```toml
+[dns]
+# 以下地址仅供示例，请替换为实际使用的 DNS 服务器。
+servers = ["192.0.2.53", "192.0.2.54:5353", "[2001:db8::53]:53"]
+```
+
+支持裸 IP（默认端口 53）、`IPv4:port` 和 `[IPv6]:port`，不支持带作用域编号的
+IPv6 地址，如 `[fe80::1%2]:53`。`servers` 留空或省略时使用系统 DNS；自定义服务器
+仍会读取 `/etc/hosts`。DNS 配置无效时会阻止启动，不会自动改用公共 DNS。
+
+TCP 独立查询 A 和 AAAA，收到地址后开始连接，失败后尝试其他允许访问的地址。
+DNS 解析和所有连接尝试共用 `timeouts.connect_ms`。UDP 目标和 `[udp].advertise`
+域名使用同一解析器，只查询与中继套接字匹配的地址族。
+
+**排查。** 日志会记录 DNS 错误和耗时。在代理所在的网络环境中，对比客户端解析
+和代理解析：
+
+```bash
+# 客户端解析目标域名。
+curl -v --socks5 127.0.0.1:1080 https://example.com
+# 代理解析目标域名。
+curl -v --socks5-hostname 127.0.0.1:1080 https://example.com
+```
+
+启用认证时需补上凭证。如果只有代理解析失败，检查代理环境中的 `/etc/resolv.conf`，
+分别查询 A、AAAA，并测试 UDP 和 TCP DNS。DNS 服务不可达时，修复该服务或在 `[dns]`
+中指定可达的服务器。Docker 桥接网络中的 `127.0.0.53` 指向容器自身，并非宿主机的
+systemd-resolved 服务。
+
 ### UDP 中继与 NAT / Docker
 
 `CONNECT` 在单个 TCP 监听端口上工作,但 **UDP ASSOCIATE** 使用独立的 UDP 中继套接字。默认情况下,每个关联(association)会绑定一个由操作系统分配的临时 UDP 端口,服务器会通告一个 `BND.ADDR:BND.PORT` 地址,客户端**必须**将其数据报发送到该地址(RFC 1928)。两个 `[udp]` 选项让这一机制能够穿透防火墙和 NAT:
@@ -273,7 +312,7 @@ advertise  = "socks.example.com"  # 客户端可达的公网 IP 或 DDNS 域名
 > 生成这段 `[udp]` 配置。
 
 - **`port_range`** —— 将每个关联的 UDP 套接字绑定到已知范围内,而非随机的临时端口,这样防火墙/NAT 只需开放该范围即可。每个关联会绑定各自的套接字,因此范围大小应 **≥ 预期的并发 UDP 客户端数量**;`"40000-40000"` 只有一个端口,会导致 UDP 串行化。当范围耗尽时,UDP ASSOCIATE 会返回通用失败(general failure)应答。
-- **`advertise`** —— UDP ASSOCIATE 应答所使用的客户端可达公网 IP 或 DNS 域名。默认情况下,服务器会通告客户端 TCP 连接抵达时所用的服务器侧 IP(即控制套接字的本地地址);当该 IP 对客户端不可达时(例如服务器位于 NAT 之后,或使用 Docker 桥接网络),请覆盖此项。服务器会在每个新关联建立时解析域名,并把解析后的 IP 返回给客户端,因此 DDNS 更新无需重启服务即可对新关联生效;已有的关联继续使用原地址。若解析失败或没有与 relay socket 地址族一致的结果,关联会返回 `host unreachable`,不会静默通告不可达的内网/绑定地址。通告的**端口始终是真实绑定的端口**,因此任何 NAT/转发都必须**端口保持一致(1:1)**。可接受裸 IP、`ip:port` 格式(端口会被忽略)或 ASCII DNS 域名;格式错误的值会在启动时被拒绝。
+- **`advertise`** —— UDP ASSOCIATE 应答所使用的客户端可达公网 IP 或 DNS 域名。默认情况下,服务器会通告客户端 TCP 连接抵达时所用的服务器侧 IP(即控制套接字的本地地址);当该 IP 对客户端不可达时(例如服务器位于 NAT 之后,或使用 Docker 桥接网络),请覆盖此项。新关联通过共享 DNS 缓存查询域名，并将结果返回给客户端。DDNS 更新在记录的 TTL 到期后对新关联生效，无需重启；已有的关联继续使用原地址。若解析失败或没有与 relay socket 地址族一致的结果,关联会返回 `host unreachable`,不会静默通告不可达的内网/绑定地址。通告的**端口始终是真实绑定的端口**,因此任何 NAT/转发都必须**端口保持一致(1:1)**。可接受裸 IP、`ip:port` 格式(端口会被忽略)或 ASCII DNS 域名;格式错误的值会在启动时被拒绝。
 
 **Docker。** 随附的 compose 配置使用 `network_mode: host`(Linux),无需任何端口映射。若使用桥接网络,请使用**短语法**发布 TCP 控制端口和 UDP 范围(Compose 长语法不支持范围),并将 `advertise` 设置为宿主机的公网 IP 或 DDNS 域名:
 
