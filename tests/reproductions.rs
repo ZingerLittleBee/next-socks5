@@ -31,6 +31,7 @@ fn no_auth_config() -> Config {
         timeouts: Timeouts::default(),
         limits: Limits::default(),
         udp: Default::default(),
+        dns: Default::default(),
         admin: Default::default(),
         // Relay reproduction tests dial loopback helpers; allow it. The SSRF
         // test builds its own secure-egress config.
@@ -51,6 +52,7 @@ fn password_config() -> Config {
         timeouts: Timeouts::default(),
         limits: Limits::default(),
         udp: Default::default(),
+        dns: Default::default(),
         admin: Default::default(),
         // Relay reproduction tests dial loopback helpers; allow it. The SSRF
         // test builds its own secure-egress config.
@@ -176,8 +178,8 @@ async fn stalled_handshake_is_closed_within_deadline() {
     let mut buf = [0u8; 1];
     let closed = tokio::time::timeout(Duration::from_secs(2), client.read(&mut buf)).await;
     match closed {
-        Ok(Ok(0)) => {}        // EOF: server dropped us — correct
-        Ok(Err(_)) => {}       // reset: also closed — correct
+        Ok(Ok(0)) => {}  // EOF: server dropped us — correct
+        Ok(Err(_)) => {} // reset: also closed — correct
         Ok(Ok(n)) => panic!("expected close, server sent {n} bytes"),
         Err(_) => panic!("BUG: stalled handshake was NOT closed within 2s (no handshake timeout)"),
     }
@@ -364,7 +366,15 @@ async fn admin_socket_is_not_group_or_world_accessible() {
     let (_sd_tx, sd_rx) = watch::channel(false);
     let sock_for_task = sock.clone();
     tokio::spawn(async move {
-        let _ = serve(&sock_for_task, source, events, EventRing::new(), sd_rx, None).await;
+        let _ = serve(
+            &sock_for_task,
+            source,
+            events,
+            EventRing::new(),
+            sd_rx,
+            None,
+        )
+        .await;
     });
 
     // Give serve() time to bind.
@@ -398,7 +408,15 @@ async fn admin_serve_creates_missing_parent_dir() {
     let (_sd_tx, sd_rx) = watch::channel(false);
     let sock_for_task = sock.clone();
     tokio::spawn(async move {
-        let _ = serve(&sock_for_task, source, events, EventRing::new(), sd_rx, None).await;
+        let _ = serve(
+            &sock_for_task,
+            source,
+            events,
+            EventRing::new(),
+            sd_rx,
+            None,
+        )
+        .await;
     });
 
     let mut bound = false;
@@ -534,7 +552,8 @@ async fn malformed_auth_gets_failure_reply_before_close() {
         .unwrap();
 
     let mut auth_reply = [0u8; 2];
-    let got = tokio::time::timeout(Duration::from_secs(2), client.read_exact(&mut auth_reply)).await;
+    let got =
+        tokio::time::timeout(Duration::from_secs(2), client.read_exact(&mut auth_reply)).await;
     match got {
         Ok(Ok(_)) => assert_eq!(
             auth_reply,
@@ -682,10 +701,13 @@ async fn pipelined_greeting_request_and_payload_are_relayed() {
     client.read_exact(&mut method_reply).await.unwrap();
     assert_eq!(method_reply, [0x05, 0x00]);
     let mut connect_reply = [0u8; 10];
-    tokio::time::timeout(Duration::from_secs(2), client.read_exact(&mut connect_reply))
-        .await
-        .expect("no connect reply — pipelined request was dropped")
-        .unwrap();
+    tokio::time::timeout(
+        Duration::from_secs(2),
+        client.read_exact(&mut connect_reply),
+    )
+    .await
+    .expect("no connect reply — pipelined request was dropped")
+    .unwrap();
     assert_eq!(connect_reply[1], 0x00, "CONNECT should succeed");
 
     // The pipelined "ping" must have reached the echo target and come back.

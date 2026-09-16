@@ -28,3 +28,4 @@ thiserror = "2"
 postcard = { version = "1", features = ["use-std"] }
 # Advisory file locking (flock) for single-instance admin-socket ownership.
 libc = "0.2"
+hickory-resolver = { version = "0.26.3", default-features = false, features = ["system-config", "tokio"] }

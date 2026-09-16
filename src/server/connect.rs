@@ -1,8 +1,9 @@
 //! CONNECT command: target resolution, dial with timeout, success reply, and
 //! a counted bidirectional relay.
 
+use std::collections::{HashSet, VecDeque};
 use std::io;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -32,58 +33,37 @@ pub async fn run(
     events: broadcast::Sender<Event>,
     peer: SocketAddr,
     mut shutdown: watch::Receiver<bool>,
+    resolver: Arc<crate::dns::DnsResolver>,
 ) {
     let target_str = address_to_string(&target);
-    let connect_timeout = Duration::from_millis(cfg.timeouts.connect_ms);
+    let started = Instant::now();
+    let deadline = started + Duration::from_millis(cfg.timeouts.connect_ms);
 
-    // 1. Resolve the target to a concrete SocketAddr, bounding DNS by the
-    //    connect timeout so a slow/blackholed resolver cannot stall the task.
-    let addr = match tokio::time::timeout(connect_timeout, resolve(&target)).await {
-        Ok(Some(addr)) => addr,
-        Ok(None) | Err(_) => {
-            reply_failure(&mut client, Socks5Error::HostUnreachable).await;
-            metrics.record_error(Socks5Error::HostUnreachable.reply_code());
-            let _ = events.send(Event::Error {
-                code: Socks5Error::HostUnreachable.reply_code(),
-                msg: format!("could not resolve {target_str}"),
-            });
-            return;
-        }
-    };
-
-    // 2. Egress policy: refuse internal/metadata destinations (SSRF guard). The
-    //    check runs after resolution so domains pointing at internal IPs are
-    //    blocked too.
-    if cfg.egress.is_blocked(addr.ip()) {
-        reply_failure(&mut client, Socks5Error::NotAllowed).await;
-        metrics.record_error(Socks5Error::NotAllowed.reply_code());
-        let _ = events.send(Event::Error {
-            code: Socks5Error::NotAllowed.reply_code(),
-            msg: format!("destination not allowed: {target_str}"),
-        });
-        return;
-    }
-
-    // 3. Dial the upstream with a connect timeout.
-    let upstream = match tokio::time::timeout(connect_timeout, TcpStream::connect(addr)).await {
-        Ok(Ok(stream)) => stream,
-        Ok(Err(e)) => {
-            let err = Socks5Error::from_io(&e);
+    let upstream = match establish(&target, &cfg, &resolver, deadline).await {
+        Ok(stream) => stream,
+        Err(error) => {
+            let (err, msg) = match error {
+                EstablishError::Dns(detail) => (
+                    Socks5Error::HostUnreachable,
+                    format!("could not resolve {target_str}: {detail}"),
+                ),
+                EstablishError::Blocked => (
+                    Socks5Error::NotAllowed,
+                    format!("destination not allowed: {target_str}"),
+                ),
+                EstablishError::Dial(error) => (
+                    Socks5Error::from_io(&error),
+                    format!(
+                        "connect to {target_str} failed after {} ms: {error}",
+                        started.elapsed().as_millis()
+                    ),
+                ),
+            };
             reply_failure(&mut client, err.clone()).await;
             metrics.record_error(err.reply_code());
             let _ = events.send(Event::Error {
                 code: err.reply_code(),
-                msg: format!("connect to {target_str} failed: {e}"),
-            });
-            return;
-        }
-        Err(_) => {
-            // Timeout elapsed before the connection was established.
-            reply_failure(&mut client, Socks5Error::TtlExpired).await;
-            metrics.record_error(Socks5Error::TtlExpired.reply_code());
-            let _ = events.send(Event::Error {
-                code: Socks5Error::TtlExpired.reply_code(),
-                msg: format!("connect to {target_str} timed out"),
+                msg,
             });
             return;
         }
@@ -155,16 +135,150 @@ async fn wait_for_shutdown(shutdown: &mut watch::Receiver<bool>) {
     }
 }
 
-/// Resolve a SOCKS5 [`Address`] to a single [`SocketAddr`].
-async fn resolve(target: &Address) -> Option<SocketAddr> {
-    match target {
-        Address::V4(ip, port) => Some(SocketAddr::new(IpAddr::V4(*ip), *port)),
-        Address::V6(ip, port) => Some(SocketAddr::new(IpAddr::V6(*ip), *port)),
-        Address::Domain(host, port) => tokio::net::lookup_host((host.as_str(), *port))
-            .await
-            .ok()
-            .and_then(|mut it| it.next()),
+enum EstablishError {
+    Dns(String),
+    Blocked,
+    Dial(io::Error),
+}
+
+/// Resolve both families while connecting. A failed early candidate must not
+/// cancel a slower DNS answer; only an established connection ends the search.
+async fn establish(
+    target: &Address,
+    cfg: &Config,
+    resolver: &crate::dns::DnsResolver,
+    deadline: Instant,
+) -> Result<TcpStream, EstablishError> {
+    let (host, port) = match target {
+        Address::Domain(host, port) => (host, *port),
+        literal => {
+            let address = match literal {
+                Address::V4(ip, port) => SocketAddr::new((*ip).into(), *port),
+                Address::V6(ip, port) => SocketAddr::new((*ip).into(), *port),
+                Address::Domain(_, _) => return Err(EstablishError::Dns("invalid target".into())),
+            };
+            if cfg.egress.is_blocked(address.ip()) {
+                return Err(EstablishError::Blocked);
+            }
+            return dial_one(address, deadline)
+                .await
+                .map_err(EstablishError::Dial);
+        }
+    };
+    let started = Instant::now();
+    let a = resolver.lookup(host, port, deadline, true);
+    let aaaa = resolver.lookup(host, port, deadline, false);
+    tokio::pin!(a, aaaa);
+    let mut done = [false; 2];
+    let mut errors = [String::new(), String::new()];
+    let mut queue = VecDeque::new();
+    let mut seen = HashSet::new();
+    let mut blocked = false;
+    let mut active = None;
+    let mut attempt_deadline = deadline;
+    let mut last_error = None;
+    loop {
+        if active.is_none() {
+            if let Some(address) = queue.pop_front() {
+                // Reserve time for actual alternatives. A still-pending DNS
+                // query is not a candidate and must not shorten a lone dial.
+                let divisor = u32::try_from(queue.len() + 1).unwrap_or(u32::MAX);
+                let now = Instant::now();
+                attempt_deadline = now + deadline.saturating_duration_since(now) / divisor;
+                active = Some(Box::pin(TcpStream::connect(address)));
+            } else if done.iter().all(|finished| *finished) {
+                return Err(match last_error {
+                    Some(error) => EstablishError::Dial(error),
+                    None if blocked => EstablishError::Blocked,
+                    None => EstablishError::Dns(format!(
+                        "failed after {} ms: A: {}; AAAA: {}",
+                        started.elapsed().as_millis(),
+                        errors[0],
+                        errors[1]
+                    )),
+                });
+            }
+        }
+        tokio::select! {
+            result = &mut a, if !done[0] => {
+                done[0] = true;
+                match result {
+                    Ok(addresses) => add_candidates(addresses, cfg, &mut queue, &mut seen, &mut blocked),
+                    Err(error) => errors[0] = error.to_string(),
+                }
+                if active.is_some() && !queue.is_empty() {
+                    let now = Instant::now();
+                    let divisor = u32::try_from(queue.len() + 1).unwrap_or(u32::MAX);
+                    attempt_deadline = attempt_deadline.min(now + deadline.saturating_duration_since(now) / divisor);
+                }
+            }
+            result = &mut aaaa, if !done[1] => {
+                done[1] = true;
+                match result {
+                    Ok(addresses) => add_candidates(addresses, cfg, &mut queue, &mut seen, &mut blocked),
+                    Err(error) => errors[1] = error.to_string(),
+                }
+                if active.is_some() && !queue.is_empty() {
+                    let now = Instant::now();
+                    let divisor = u32::try_from(queue.len() + 1).unwrap_or(u32::MAX);
+                    attempt_deadline = attempt_deadline.min(now + deadline.saturating_duration_since(now) / divisor);
+                }
+            }
+            result = async {
+                match &mut active {
+                    Some(attempt) => attempt.await,
+                    None => std::future::pending().await,
+                }
+            }, if active.is_some() => {
+                active = None;
+                match result {
+                    Ok(stream) => return Ok(stream),
+                    Err(error) => last_error = Some(error),
+                }
+            }
+            _ = tokio::time::sleep_until(attempt_deadline), if active.is_some() => {
+                active = None;
+                last_error = Some(io::Error::new(io::ErrorKind::TimedOut, "connection attempt timed out"));
+            }
+            _ = tokio::time::sleep_until(deadline) => {
+                return Err(if active.is_some() || last_error.is_some() {
+                    EstablishError::Dial(io::Error::new(io::ErrorKind::TimedOut, "DNS and connection budget exhausted"))
+                } else if blocked {
+                    EstablishError::Blocked
+                } else {
+                    EstablishError::Dns(format!("timed out after {} ms; A: {}; AAAA: {}",
+                        started.elapsed().as_millis(), errors[0], errors[1]))
+                });
+            }
+        }
     }
+}
+
+fn add_candidates(
+    addresses: Vec<SocketAddr>,
+    cfg: &Config,
+    queue: &mut VecDeque<SocketAddr>,
+    seen: &mut HashSet<SocketAddr>,
+    blocked: &mut bool,
+) {
+    for address in addresses {
+        if cfg.egress.is_blocked(address.ip()) {
+            *blocked = true;
+        } else if seen.insert(address) {
+            queue.push_back(address);
+        }
+    }
+}
+
+async fn dial_one(address: SocketAddr, deadline: Instant) -> io::Result<TcpStream> {
+    tokio::time::timeout_at(deadline, TcpStream::connect(address))
+        .await
+        .map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::TimedOut,
+                format!("connect to {address} timed out"),
+            )
+        })?
 }
 
 /// Render a target address as a `host:port` string for logging/metrics.

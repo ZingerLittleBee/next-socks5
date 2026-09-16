@@ -26,6 +26,8 @@ is hand-written; the dependency footprint is kept deliberately small.
   for the full compliance audit.
 - **Address types** — IPv4, IPv6, and Domain (`ATYP` `0x01` / `0x04` / `0x03`),
   with server-side DNS resolution for both CONNECT and UDP targets.
+- **DNS** — system or custom DNS servers, `/etc/hosts` support, and independent
+  IPv4/IPv6 queries so one family's failure does not discard the other's answers.
 - **Full RFC error mapping** — every reply code `0x00`–`0x08` is produced where
   applicable (e.g. unknown command → `0x07`, unknown address type → `0x08`,
   connection limit → `0x02`, refused/unreachable/timeout mapped from the OS).
@@ -42,7 +44,7 @@ is hand-written; the dependency footprint is kept deliberately small.
   `max_connections` limit, half-open-aware relay, and graceful shutdown.
 - **Configuration** — TOML file with CLI overrides.
 - **Small & portable** — pure Rust, no C dependencies; ships as fully static
-  musl binaries and a ~3.5 MB `scratch`-based container image.
+  musl binaries and a `scratch`-based container image.
 
 ## Installation
 
@@ -228,9 +230,12 @@ password = "hunter2"
 
 [timeouts]
 handshake_ms = 10000       # greeting+auth+request deadline (anti-slowloris)
-connect_ms = 10000
+connect_ms = 10000         # total DNS + upstream connection budget
 tcp_idle_ms = 300000
 udp_idle_ms = 60000
+
+[dns]
+servers = []              # empty or omitted: use system DNS servers
 
 [limits]
 max_connections = 2048     # optional: global concurrent cap (unbounded if unset)
@@ -272,6 +277,43 @@ need to reach internal targets, relax it with an `[egress]` section — see
 [`config.example.toml`](config.example.toml). The pre-relay handshake is bounded by
 `timeouts.handshake_ms` (default 10s) to drop slowloris-style stalled clients.
 
+### DNS resolution
+
+DNS uses the asynchronous Hickory resolver with system DNS servers and
+`/etc/hosts` by default. Cached records follow their TTLs. To use custom servers:
+
+```toml
+[dns]
+# Examples only: replace these documentation addresses with your DNS servers.
+servers = ["192.0.2.53", "192.0.2.54:5353", "[2001:db8::53]:53"]
+```
+
+Entries accept a bare IP (port 53), `IPv4:port`, or `[IPv6]:port`; scoped IPv6
+addresses such as `[fe80::1%2]:53` are unsupported. An empty or omitted `servers`
+list uses system DNS. Custom servers still respect `/etc/hosts`. Invalid DNS
+configuration stops startup; there is no automatic public DNS fallback.
+
+TCP queries A and AAAA independently, connects as answers arrive, and tries
+other permitted addresses after a failure. DNS and all connection attempts
+share `timeouts.connect_ms`. UDP targets and `[udp].advertise` names use the
+relay socket's address family and the same resolver.
+
+**Troubleshooting.** Logs include the DNS error and elapsed time. Compare client
+and proxy resolution from the proxy's network environment:
+
+```bash
+# Client resolves the destination.
+curl -v --socks5 127.0.0.1:1080 https://example.com
+# Proxy resolves the destination.
+curl -v --socks5-hostname 127.0.0.1:1080 https://example.com
+```
+
+Add credentials if authentication is enabled. If only proxy resolution fails,
+check its `/etc/resolv.conf`, query A and AAAA separately, and test DNS over UDP
+and TCP. Repair an unreachable DNS service or set a reachable server in `[dns]`.
+In Docker bridge networking, `127.0.0.53` points to the container itself, not
+the host's systemd-resolved service.
+
 ### UDP relay & NAT / Docker
 
 `CONNECT` works over the single TCP listen port, but **UDP ASSOCIATE** uses a
@@ -302,9 +344,9 @@ advertise  = "socks.example.com"  # client-reachable public IP or DDNS name
   IP is not client-reachable (behind NAT, or Docker bridge networking). The
   advertised **port is always the real bound port**, so any NAT/forward must be
   **port-preserving (1:1)**. An unreachable advertised address is the #1 cause of
-  "TCP works but UDP doesn't". A DNS name is resolved for each new association,
-  and the resulting IP is returned to the client, so DDNS changes apply without
-  restarting the server. Existing associations keep their original address.
+  "TCP works but UDP doesn't". New associations look up the name through the
+  shared DNS cache. DDNS changes take effect after the record's TTL expires;
+  existing associations keep their original address. No restart is needed.
   If resolution fails or yields no address matching the relay socket's address
   family, the association fails with `host unreachable` instead of advertising
   an unreachable private/bound address.
