@@ -26,9 +26,8 @@ is hand-written; the dependency footprint is kept deliberately small.
   for the full compliance audit.
 - **Address types** — IPv4, IPv6, and Domain (`ATYP` `0x01` / `0x04` / `0x03`),
   with server-side DNS resolution for both CONNECT and UDP targets.
-- **DNS** — asynchronous resolution with system or explicitly configured DNS
-  servers and `/etc/hosts` support. TCP queries IPv4 and IPv6 independently so
-  an error for one address family does not discard valid answers for the other.
+- **DNS** — system or custom DNS servers, `/etc/hosts` support, and independent
+  IPv4/IPv6 queries so one family's failure does not discard the other's answers.
 - **Full RFC error mapping** — every reply code `0x00`–`0x08` is produced where
   applicable (e.g. unknown command → `0x07`, unknown address type → `0x08`,
   connection limit → `0x02`, refused/unreachable/timeout mapped from the OS).
@@ -280,10 +279,8 @@ need to reach internal targets, relax it with an `[egress]` section — see
 
 ### DNS resolution
 
-TCP CONNECT, UDP targets, and `[udp].advertise` names share an asynchronous
-Hickory resolver. By default it reads the system's DNS server configuration
-and respects `/etc/hosts`. There is no automatic fallback to public DNS.
-To override the DNS servers, configure reachable resolver IP addresses:
+DNS uses the asynchronous Hickory resolver with system DNS servers and
+`/etc/hosts` by default. Cached records follow their TTLs. To use custom servers:
 
 ```toml
 [dns]
@@ -291,34 +288,18 @@ To override the DNS servers, configure reachable resolver IP addresses:
 servers = ["192.0.2.53", "192.0.2.54:5353", "[2001:db8::53]:53"]
 ```
 
-Each entry accepts a bare IPv4 or IPv6 address (port 53), `IPv4:port`, or
-`[IPv6]:port`. Scoped IPv6 server addresses such as `[fe80::1%2]:53` are not
-supported. An empty or omitted `servers` list uses the system DNS servers;
-explicit servers still respect `/etc/hosts`. Invalid DNS configuration prevents
-the CLI server from starting and is reported before it opens the listen port.
+Entries accept a bare IP (port 53), `IPv4:port`, or `[IPv6]:port`; scoped IPv6
+addresses such as `[fe80::1%2]:53` are unsupported. An empty or omitted `servers`
+list uses system DNS. Custom servers still respect `/etc/hosts`. Invalid DNS
+configuration stops startup; there is no automatic public DNS fallback.
 
-For TCP, A and AAAA records are queried independently and concurrently. If one
-query fails but the other returns addresses, those answers remain available.
-Connection attempts begin as answers arrive while the other family's query
-continues. Later answers remain eligible if an earlier connection attempt fails
-or its addresses are blocked. Each candidate is checked against the egress
-policy before dialing, and connection failure advances to the next permitted
-address. DNS resolution and all connection attempts share one
-`timeouts.connect_ms` budget. Connection time is divided between the active
-attempt and permitted addresses already returned by DNS. If another permitted
-address arrives during a dial, the remaining time is shared with it. A pending
-DNS query alone does not shorten the connection time for the only available
-address. Pending work stops when a connection succeeds or the total budget
-expires.
+TCP queries A and AAAA independently, connects as answers arrive, and tries
+other permitted addresses after a failure. DNS and all connection attempts
+share `timeouts.connect_ms`. UDP targets and `[udp].advertise` names use the
+relay socket's address family and the same resolver.
 
-UDP target and advertise lookups query only the relay socket's address family.
-The resolver keeps a separate bounded cache for each family and follows DNS
-record TTLs; UDP does not add a separate fixed-duration cache.
-
-**Troubleshooting.** DNS failures include the elapsed time and distinguish
-timeouts, empty results, and resolver errors. UDP target lookup errors are
-logged at most once per second per association. Test from the same network
-environment as the proxy, using the same destination for both commands:
+**Troubleshooting.** Logs include the DNS error and elapsed time. Compare client
+and proxy resolution from the proxy's network environment:
 
 ```bash
 # Client resolves the destination.
@@ -327,13 +308,11 @@ curl -v --socks5 127.0.0.1:1080 https://example.com
 curl -v --socks5-hostname 127.0.0.1:1080 https://example.com
 ```
 
-Add your proxy credentials when authentication is enabled. If only proxy-side
-resolution fails, inspect `/etc/resolv.conf` where the proxy runs and query its
-configured server for A and AAAA separately. Compare UDP and TCP DNS queries
-to identify a missing listener or blocked port 53. An unreachable DNS stub
-still needs to be repaired or replaced with a reachable server in `[dns]`.
-In Docker bridge networking, `127.0.0.53` refers to the container itself, not
-the host's systemd-resolved service; check the container's DNS configuration.
+Add credentials if authentication is enabled. If only proxy resolution fails,
+check its `/etc/resolv.conf`, query A and AAAA separately, and test DNS over UDP
+and TCP. Repair an unreachable DNS service or set a reachable server in `[dns]`.
+In Docker bridge networking, `127.0.0.53` points to the container itself, not
+the host's systemd-resolved service.
 
 ### UDP relay & NAT / Docker
 
@@ -365,10 +344,9 @@ advertise  = "socks.example.com"  # client-reachable public IP or DDNS name
   IP is not client-reachable (behind NAT, or Docker bridge networking). The
   advertised **port is always the real bound port**, so any NAT/forward must be
   **port-preserving (1:1)**. An unreachable advertised address is the #1 cause of
-  "TCP works but UDP doesn't". A DNS name is looked up for each new association,
-  using the shared resolver's TTL-aware cache, and the resulting IP is returned
-  to the client. DDNS changes apply after the cached record expires without
-  restarting the server. Existing associations keep their original address.
+  "TCP works but UDP doesn't". New associations look up the name through the
+  shared DNS cache. DDNS changes take effect after the record's TTL expires;
+  existing associations keep their original address. No restart is needed.
   If resolution fails or yields no address matching the relay socket's address
   family, the association fails with `host unreachable` instead of advertising
   an unreachable private/bound address.
