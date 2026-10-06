@@ -1,113 +1,43 @@
 ---
-import { REPO, SECTIONS, VERSION } from '../consts';
+import { REPO, SECTIONS } from '../consts';
 
 const installIdx = SECTIONS.findIndex((s) => s.id === 'install');
-
-// A typical first session. Credentials follow install.sh's generated format
-// (user_xxxxxx); the password is masked.
-const session: { text: string; tone?: string }[] = [
-  { text: '$ curl -fsSL .../install.sh | sh' },
-  { text: `  ✓ next-socks5 v${VERSION} installed to /usr/local/bin`, tone: 'cy' },
-  { text: '  ✓ generated user "user_k7f2qa" and a 20-char password', tone: 'cy' },
-  { text: '  ✓ free port 41873 · systemd unit started', tone: 'cy' },
-  { text: '  socks5://user_k7f2qa:••••@203.0.113.7:41873', tone: 'ye' },
-  { text: ' ' },
-  { text: '$ curl -sI --socks5 user_k7f2qa:••••@127.0.0.1:41873 https://example.com' },
-  { text: 'HTTP/2 200', tone: 'cy' },
-  { text: ' ' },
-  { text: '$ next-socks5 attach' },
-  { text: '  attached to /run/next-socks5/admin.sock · replaying 500 events', tone: 'dim' },
-];
 ---
 
 <section id="overview" class="section">
-  <div class="hero">
-    <div class="box box--double">
-      <span class="box-title">README.md</span>
-      <div class="dim"># SOCKS5 server · RFC 1928 + RFC 1929 · written in Rust</div>
-      <h1>A SOCKS5 proxy that <span class="cy">shows its work.</span></h1>
-      <p class="lede">
-        This page is drawn the way the server's dashboard is: panels, keys, and a log you can read. A
-        hand-written protocol core with secure defaults, one-command install, and every connection on
-        screen.
-      </p>
-      <div class="keys">
-        <a class="key key--primary" href="#install" data-go={installIdx}><kbd>i</kbd>install</a>
-        <a class="key" href={REPO}><kbd>g</kbd>github</a>
-        <a class="key" href={`${REPO}/blob/main/README.md`}><kbd>d</kbd>docs</a>
-      </div>
-    </div>
-
-    <div class="box">
-      <span class="box-title">Session</span>
-      <span class="box-meta">root@vps</span>
-      <div class="session" data-session>
-        {session.map((l) => <div class:list={['line', l.tone]}>{l.text}</div>)}
-        <div data-prompt><span class="ps">$ </span><span class="cursor" data-cursor></span></div>
-      </div>
+  <div class="box box--double hero">
+    <span class="box-title">README.md</span>
+    <div class="dim"># SOCKS5 server · RFC 1928 + RFC 1929 · written in Rust</div>
+    <h1>A SOCKS5 proxy that <span class="cy">shows its work.</span></h1>
+    <p class="lede">
+      This page is drawn the way the server's dashboard is: panels, keys, and a log you can read. A
+      hand-written protocol core with secure defaults, one-command install, and every connection on
+      screen.
+    </p>
+    <div class="keys">
+      <a class="key key--primary" href="#install" data-go={installIdx}><kbd>i</kbd>install</a>
+      <a class="key" href={REPO}><kbd>g</kbd>github</a>
+      <a class="key" href={`${REPO}/blob/main/README.md`}><kbd>d</kbd>docs</a>
     </div>
   </div>
 </section>
 
-<script is:inline>
-  // Replay the session like a terminal: commands are typed out, their output
-  // appears at once, and the cursor follows the last line. The box is pinned
-  // to its final height first so nothing below moves. Without JS or with
-  // reduced motion the finished session is shown as-is.
-  (() => {
-    const box = document.querySelector('[data-session]');
-    if (!box || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
-    const lines = [...box.querySelectorAll('.line')];
-    const prompt = box.querySelector('[data-prompt]');
-    const cursor = box.querySelector('[data-cursor]');
-    const texts = lines.map((l) => l.textContent ?? '');
-
-    box.style.minHeight = `${box.offsetHeight}px`;
-    lines.forEach((l) => (l.hidden = true));
-    prompt.hidden = true;
-
-    const after = (ms, fn) => setTimeout(fn, ms);
-    let i = 0;
-    const next = () => {
-      if (i >= lines.length) {
-        prompt.append(cursor);
-        prompt.hidden = false;
-        box.style.minHeight = '';
-        return;
-      }
-      const line = lines[i];
-      const text = texts[i++];
-      const out = document.createTextNode('');
-      line.replaceChildren(out, cursor);
-      line.hidden = false;
-      if (!text.startsWith('$ ')) {
-        out.data = text;
-        return after(140, next);
-      }
-      out.data = '$ ';
-      let c = 2;
-      const type = () => {
-        if (c >= text.length) return after(380, next);
-        out.data += text[c++];
-        after(22 + Math.random() * 30, type);
-      };
-      after(260, type);
-    };
-    after(400, next);
-  })();
-</script>
-
 <style>
   .hero {
-    display: grid;
-    grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
-    gap: var(--gap-in);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: 100%;
+    max-width: 980px;
+    margin-inline: auto;
+    padding: clamp(36px, 5vw, 64px) clamp(20px, 4vw, 48px);
+    text-align: center;
   }
 
   h1 {
     margin: 18px 0 0;
     color: var(--hi);
-    font-size: clamp(36px, 4.6vw, 68px);
+    font-size: clamp(36px, 5.2vw, 72px);
     font-weight: 800;
     line-height: 1.02;
     letter-spacing: -0.04em;
@@ -118,14 +48,15 @@ const session: { text: string; tone?: string }[] = [
     max-width: 60ch;
     margin: 24px 0 0;
     color: var(--text2);
-    text-wrap: pretty;
+    text-wrap: balance;
   }
 
   .keys {
     display: flex;
     flex-wrap: wrap;
+    justify-content: center;
     gap: 10px;
-    margin-top: 28px;
+    margin-top: 32px;
   }
   .key {
     display: inline-flex;
@@ -172,40 +103,5 @@ const session: { text: string; tone?: string }[] = [
   .key--primary kbd {
     background: var(--on-cyan);
     color: var(--cyan);
-  }
-
-  .session {
-    display: flex;
-    flex-direction: column;
-    min-height: 300px;
-    font-size: 13px;
-    white-space: pre-wrap;
-    word-break: break-all;
-  }
-
-  .cursor {
-    display: inline-block;
-    width: 8px;
-    height: 15px;
-    border-radius: 1px;
-    background: var(--cyan);
-    vertical-align: -2px;
-    animation: blink 1.1s steps(1) infinite;
-  }
-  @keyframes blink {
-    0%,
-    49% {
-      opacity: 1;
-    }
-    50%,
-    100% {
-      opacity: 0;
-    }
-  }
-
-  @media (max-width: 960px) {
-    .hero {
-      grid-template-columns: minmax(0, 1fr);
-    }
   }
 </style>
