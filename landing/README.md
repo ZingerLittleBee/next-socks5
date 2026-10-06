@@ -4,9 +4,11 @@ Marketing landing page for [next-socks5](https://github.com/ZingerLittleBee/next
 built with [Astro](https://astro.build) as a fully static site. Managed with
 [Bun](https://bun.sh).
 
-Terminal / ratatui-inspired aesthetic: IBM Plex Mono, a near-black green-tinted
-palette, and sharp-cornered panels with titles cut into the top border. The hero
-showcases a faithful recreation of the live `--mock` TUI dashboard.
+The whole page is drawn as a TUI: Geist Mono, a near-black palette with a cyan
+accent, rounded panels with titles cut into the top border, a numbered tab bar
+with scrollspy, and keyboard shortcuts (`1`-`5` jump, `↑↓` select a feature,
+`i` install, `g` GitHub). The Dashboard section recreates the live `--mock`
+TUI dashboard.
 
 ## Develop
 
@@ -28,21 +30,21 @@ bun run og       # regenerate public/og.png (social preview)
 
 ```
 src/
+  consts.ts                 # repo URL, install command, version (read from Cargo.toml), sections
   layouts/Layout.astro      # <head>, fonts, OG/meta, global.css
-  styles/global.css         # base styles, keyframes, hover utilities, responsive rules
+  styles/global.css         # tokens, panel + section primitives
   components/
-    Logo.astro              # plug-zap brand mark (nav + footer)
-    Nav.astro
-    Hero.astro              # headline + one-command terminal session + stat strip
-    Dashboard.astro         # ratatui --mock dashboard recreation
-    Features.astro          # 0x01–0x06 feature grid
-    Install.astro           # four install methods + usage line
-    Config.astro            # config.toml showcase
-    Performance.astro       # headline numbers
-    Footer.astro            # CTA + copy-to-clipboard install command
+    Logo.astro              # plug-zap brand mark
+    TopBar.astro            # tab bar, scrollspy, keyboard shortcuts
+    Hero.astro              # 1 Overview: README panel + neofetch readout
+    Dashboard.astro         # 2 Dashboard: --mock dashboard recreation
+    Features.astro          # 3 Features: select list + detail panes
+    Performance.astro       # 4 Perf: headline numbers
+    Install.astro           # 5 Install: install.sh + common flags
+    Footer.astro            # key-hint status bar
   pages/index.astro         # assembles all sections
 public/
-  favicon.svg               # plug-zap mark on the green brand chip
+  favicon.svg               # plug-zap mark on the cyan brand chip
 ```
 
 ## Deployment

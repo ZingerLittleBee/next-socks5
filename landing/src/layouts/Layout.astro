@@ -8,7 +8,7 @@ interface Props {
 
 const {
   title = 'next-socks5 — a SOCKS5 proxy that shows its work',
-  description = 'Lightweight, scalable SOCKS5 server written in Rust. Watch every connection in a live terminal dashboard, or run it headless in a ~3.5 MB container. One command and you are proxying.',
+  description = 'Lightweight SOCKS5 server written in Rust. Secure defaults, a one-command installer, and a live terminal dashboard that shows every connection.',
 } = Astro.props;
 
 const canonical = new URL(Astro.url.pathname, Astro.site);
@@ -39,13 +39,12 @@ const ogImage = new URL('/og.png', Astro.site);
     <meta name="twitter:title" content={title} />
     <meta name="twitter:description" content={description} />
     <meta name="twitter:image" content={ogImage} />
-    <meta name="theme-color" content="#070B0A" />
+    <meta name="theme-color" content="#0B0C0C" />
 
-    <!-- Fonts: IBM Plex Mono throughout (distinctive, terminal-serious) -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
-      href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap"
+      href="https://fonts.googleapis.com/css2?family=Geist+Mono:wght@400;500;600;700;800&display=swap"
       rel="stylesheet"
     />
   </head>

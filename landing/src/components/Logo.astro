@@ -1,27 +1,21 @@
 ---
-// Brand mark — Lucide "plug-zap" (plug + lightning), a dark stroke inside the
-// green brand chip. Thematically perfect for a proxy that links connections.
+// Brand mark: Lucide "plug-zap" stroked in the dark ink on the cyan brand chip.
 interface Props {
   size?: number;
   icon?: number;
 }
-const { size = 28, icon = 17 } = Astro.props;
-// Subtle rounding (~21% of the chip size) — softens the mark without losing
-// the sharp terminal feel.
-const radius = Math.round(size * 0.21);
+const { size = 26, icon = 15 } = Astro.props;
+const radius = Math.round(size * 0.27);
 ---
 
-<span
-  class="ns5-logo"
-  style={`display:inline-flex; align-items:center; justify-content:center; width:${size}px; height:${size}px; background:#46E08A; border-radius:${radius}px;`}
->
+<span class="logo" style={`width:${size}px; height:${size}px; border-radius:${radius}px;`}>
   <svg
     width={icon}
     height={icon}
     viewBox="0 0 24 24"
     fill="none"
-    stroke="#07100C"
-    stroke-width="2.2"
+    stroke="currentColor"
+    stroke-width="2.3"
     stroke-linecap="round"
     stroke-linejoin="round"
     aria-hidden="true"
@@ -33,3 +27,13 @@ const radius = Math.round(size * 0.21);
     <path d="m18 3-4 4h6l-4 4"></path>
   </svg>
 </span>
+
+<style>
+  .logo {
+    display: inline-grid;
+    flex: none;
+    place-items: center;
+    background: var(--cyan);
+    color: var(--on-cyan);
+  }
+</style>

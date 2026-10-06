@@ -1,61 +1,244 @@
 ---
+// Feature browser: a TUI-style select list on the left, details on the right.
+// Snippets mirror config.example.toml and the CLI.
 const features = [
   {
-    code: '0x01',
     title: 'CONNECT + UDP ASSOCIATE',
-    body: 'Both core SOCKS5 commands (RFC 1928), with IPv4, IPv6 and domain address types and server-side DNS. BIND is rejected by design.',
+    tag: 'rfc 1928',
+    body: 'Both core SOCKS5 commands over IPv4, IPv6 and domain names, with server-side DNS that keeps usable answers when one address family fails. BIND is refused with 0x07 by design.',
+    snip: '05 01 00 03 0b "example.com" 01 bb   # CONNECT example.com:443\n05 00 00 01 0a 00 00 05 d2 04        # succeeded',
+    hint: 'src/protocol/request.rs · IO-free, unit-tested',
   },
   {
-    code: '0x02',
-    title: 'Multi-user auth',
-    body: 'No-Auth or username/password (RFC 1929). List several credentials and serve every user from a single port — no port-per-user.',
+    title: 'Many users, one port',
+    tag: 'rfc 1929',
+    body: 'No-auth or username/password. List as many users as you need and serve all of them from a single listener. Credentials are compared in constant time.',
+    snip: '[auth]\nmethod = "password"\n\n[[auth.users]]\nusername = "alice"\npassword = "secret"',
+    hint: 'add one [[auth.users]] block per credential',
   },
   {
-    code: '0x03',
-    title: 'Secure by default',
-    body: 'Egress filtering refuses loopback, link-local (cloud metadata) and RFC1918 targets — an SSRF / open-relay guard you opt out of, not into.',
+    title: 'Egress blocked by default',
+    tag: '[egress]',
+    body: 'Loopback, link-local (including 169.254.169.254 cloud metadata), private and CGNAT targets are refused with REP 0x02. An SSRF and open-relay guard you opt out of, per class.',
+    snip: '[egress]\nblock_loopback   = true   # 127.0.0.0/8, ::1\nblock_link_local = true   # 169.254.0.0/16, fe80::/10\nblock_private    = true   # 10/8, 172.16/12, 192.168/16, fc00::/7',
+    hint: 'secure by default · covered by tests/reproductions.rs',
   },
   {
-    code: '0x04',
-    title: 'Headless for containers',
-    bodyHtml:
-      '<span style="color:#CBD6D0;">--no-tui</span> streams events to stdout for systemd / Docker. The TUI is an optional feature, so headless builds drop its dependencies entirely.',
+    title: 'Bounded at accept time',
+    tag: '[limits]',
+    body: 'Global and per-IP caps are enforced before the handshake, so a pre-auth flood counts against them. One deadline covers greeting, auth and request to drop slowloris clients.',
+    snip: '[timeouts]\nhandshake_ms = 10000   # greeting + auth + request\n\n[limits]\nmax_connections = 1024\nmax_per_ip      = 64',
+    hint: 'over the cap → dropped before handshake',
   },
   {
-    code: '0x05',
-    title: 'UDP relay through NAT',
-    body: 'Pin the relay to a port range and advertise a client-reachable BND address, so UDP ASSOCIATE works behind firewalls and Docker bridge networking.',
+    title: 'UDP through NAT',
+    tag: '[udp]',
+    body: 'Pin the relay to a port range and advertise a client-reachable BND address or DDNS name, so UDP ASSOCIATE works behind firewalls and Docker bridge networking.',
+    snip: '[udp]\nport_range = "40000-40100"\nadvertise  = "socks.example.com"',
+    hint: 'BND.ADDR is never 0.0.0.0',
   },
   {
-    code: '0x06',
-    title: 'Robust under load',
-    body: 'Connect / idle timeouts, optional global & per-IP connection caps enforced at accept time, half-open-aware relay, and graceful shutdown.',
+    title: 'Headless, then attach',
+    tag: 'serve · attach',
+    body: 'Services run with --no-tui and stream events to stdout for journald and Docker. Run next-socks5 attach on the host to open this dashboard over a local socket, no restart needed.',
+    snip: '$ next-socks5 serve --no-tui\n$ next-socks5 attach',
+    hint: 'unix socket · replays the last 500 events',
+  },
+  {
+    title: 'Small and static',
+    tag: 'musl',
+    body: 'Pure Rust with no C dependencies. Fully static binaries for x86_64 and aarch64, and a scratch-based container image. Headless builds drop the TUI dependencies entirely.',
+    snip: '$ cargo build --release --no-default-features   # headless only',
+    hint: 'ghcr.io/zingerlittlebee/next-socks5',
   },
 ];
 ---
 
-<section id="features" style="max-width:1180px; margin:0 auto; padding:56px 28px 24px;">
-  <div style="color:#46E08A; font-size:12.5px; letter-spacing:1.5px; margin-bottom:8px;">// FEATURES</div>
-  <h2 style="margin:0 0 30px; font-size:32px; font-weight:700; color:#E8F0EC; letter-spacing:-0.5px;">
-    Everything the RFC asks for. Nothing it doesn't.
-  </h2>
-  <div class="ns5-features-grid" style="display:grid; grid-template-columns:repeat(3, 1fr); gap:13px;">
-    {
-      features.map((f) => (
-        <div class="ns5-card" style="position:relative; border:1px solid #283330; background:#0A0F0D; padding:22px 20px;">
-          <span style="position:absolute; top:-8px; left:14px; background:#0A0F0D; padding:0 7px; color:#46E08A; font-size:12px;">
-            {f.code}
-          </span>
-          <h3 style="margin:6px 0 9px; font-size:16px; color:#E8F0EC; font-weight:700;">{f.title}</h3>
-          {
-            f.bodyHtml ? (
-              <p style="margin:0; font-size:13.5px; color:#8C9A95; line-height:1.6; text-wrap:pretty;" set:html={f.bodyHtml} />
-            ) : (
-              <p style="margin:0; font-size:13.5px; color:#8C9A95; line-height:1.6; text-wrap:pretty;">{f.body}</p>
-            )
-          }
-        </div>
-      ))
-    }
+<section id="features" class="section">
+  <div class="section-head">
+    <span class="section-key">3</span>
+    <h2>Features</h2>
+    <span class="section-rule"></span>
+  </div>
+  <p class="section-lede">
+    Everything RFC 1928 and 1929 ask for, and nothing they don't. Hover a row, or use ↑↓ while this
+    section is on screen.
+  </p>
+
+  <div class="section-body feat" data-features>
+    <div class="box">
+      <span class="box-title">select ({features.length})</span>
+      <span class="box-meta">↑↓</span>
+      <div class="list" role="tablist" aria-label="Features" aria-orientation="vertical">
+        {
+          features.map((f, i) => (
+            <button
+              type="button"
+              class:list={['item', { 'is-on': i === 0 }]}
+              role="tab"
+              id={`feature-tab-${i}`}
+              aria-controls={`feature-pane-${i}`}
+              aria-selected={i === 0 ? 'true' : 'false'}
+              tabindex={i === 0 ? 0 : -1}
+              data-index={i}
+              data-tag={f.tag}
+            >
+              <span class="item-title">{f.title}</span>
+              <span class="item-tag">{f.tag}</span>
+            </button>
+          ))
+        }
+      </div>
+    </div>
+
+    <div class="box">
+      <span class="box-title" data-feature-tag>{features[0]?.tag}</span>
+      <!-- Panes share one grid cell, so the box is always as tall as the
+           longest pane and switching never shifts the layout. -->
+      <div class="panes">
+        {
+          features.map((f, i) => (
+            <div
+              class:list={['pane', { 'is-shown': i === 0 }]}
+              role="tabpanel"
+              id={`feature-pane-${i}`}
+              aria-labelledby={`feature-tab-${i}`}
+            >
+              <h3>{f.title}</h3>
+              <p>{f.body}</p>
+              <pre class="snip">{f.snip}</pre>
+              <div class="hint">{f.hint}</div>
+            </div>
+          ))
+        }
+      </div>
+    </div>
   </div>
 </section>
+
+<style>
+  .feat {
+    display: grid;
+    grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+    gap: var(--gap-in);
+  }
+
+  .list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .item {
+    display: grid;
+    grid-template-columns: 3ch minmax(0, 1fr) auto;
+    gap: 8px;
+    padding: 6px 10px;
+    border: 0;
+    border-radius: var(--r-ctl);
+    background: none;
+    color: var(--text2);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: background 0.12s ease;
+  }
+  .item::before {
+    content: '';
+  }
+  .item:hover {
+    background: var(--line2);
+  }
+  .item.is-on {
+    background: var(--cyan);
+    color: var(--on-cyan);
+    font-weight: 600;
+  }
+  .item.is-on::before {
+    content: '>';
+  }
+  .item-tag {
+    color: var(--dim);
+  }
+  .item.is-on .item-tag {
+    color: var(--on-cyan);
+  }
+
+  .panes {
+    display: grid;
+  }
+  .pane {
+    grid-area: 1 / 1;
+    display: flex;
+    flex-direction: column;
+    gap: 18px;
+    min-width: 0;
+    visibility: hidden;
+  }
+  .pane.is-shown {
+    visibility: visible;
+  }
+  .pane h3 {
+    margin: 0;
+    color: var(--hi);
+    font-size: clamp(20px, 2vw, 26px);
+    font-weight: 700;
+    line-height: 1.15;
+    letter-spacing: -0.02em;
+  }
+  .pane p {
+    max-width: 62ch;
+    margin: 0;
+    color: var(--text2);
+    text-wrap: pretty;
+  }
+
+  @media (max-width: 960px) {
+    .feat {
+      grid-template-columns: minmax(0, 1fr);
+    }
+  }
+</style>
+
+<script>
+  // Hover, click, or ↑/↓ (and j/k) select a feature. The arrow keys are only
+  // taken over while Features is the active section, so they keep scrolling
+  // the page everywhere else.
+  const root = document.querySelector<HTMLElement>('[data-features]');
+  if (root) {
+    const items = [...root.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
+    const panes = [...root.querySelectorAll<HTMLElement>('[role="tabpanel"]')];
+    const tagLabel = root.querySelector<HTMLElement>('[data-feature-tag]');
+    let sel = 0;
+
+    const select = (i: number, focus = false) => {
+      const n = (i + items.length) % items.length;
+      if (n !== sel) {
+        sel = n;
+        items.forEach((it, j) => {
+          const on = j === n;
+          it.classList.toggle('is-on', on);
+          it.setAttribute('aria-selected', String(on));
+          it.tabIndex = on ? 0 : -1;
+        });
+        panes.forEach((p, j) => p.classList.toggle('is-shown', j === n));
+        if (tagLabel) tagLabel.textContent = items[n]?.dataset.tag ?? '';
+      }
+      if (focus) items[n]?.focus();
+    };
+
+    items.forEach((it, i) => {
+      it.addEventListener('mouseenter', () => select(i));
+      it.addEventListener('click', () => select(i));
+    });
+
+    window.addEventListener('keydown', (e) => {
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      const inList = root.contains(document.activeElement) && document.activeElement?.getAttribute('role') === 'tab';
+      if (!inList && document.documentElement.dataset.section !== 'features') return;
+      const step = e.key === 'ArrowDown' || e.key === 'j' ? 1 : e.key === 'ArrowUp' || e.key === 'k' ? -1 : 0;
+      if (!step) return;
+      e.preventDefault();
+      select(sel + step, inList);
+    });
+  }
+</script>
