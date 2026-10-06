@@ -36,7 +36,7 @@ src/
   components/
     Logo.astro              # plug-zap brand mark
     TopBar.astro            # tab bar, scrollspy, keyboard shortcuts
-    Hero.astro              # 1 Overview: README panel + typed session
+    Hero.astro              # 1 Overview: README panel + neofetch readout
     Dashboard.astro         # 2 Dashboard: --mock dashboard recreation
     Features.astro          # 3 Features: select list + detail panes
     Performance.astro       # 4 Perf: headline numbers
