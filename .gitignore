@@ -22,3 +22,6 @@ target
 
 # CI-only: prebuilt binaries staged for the Docker image
 /binaries/
+
+# Lefthook local overrides
+lefthook-local.yml
