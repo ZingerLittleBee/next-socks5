@@ -28,7 +28,7 @@ const features = [
     tag: '[limits]',
     body: 'Global and per-IP caps are enforced before the handshake, so a pre-auth flood counts against them. One deadline covers greeting, auth and request to drop slowloris clients.',
     snip: '[timeouts]\nhandshake_ms = 10000   # greeting + auth + request\n\n[limits]\nmax_connections = 1024\nmax_per_ip      = 64',
-    hint: 'over the cap → dropped at accept, before the handshake',
+    hint: 'over the cap → dropped before handshake',
   },
   {
     title: 'UDP through NAT',

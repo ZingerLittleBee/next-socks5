@@ -26,7 +26,7 @@
   --gap-in: 22px;
   --gap-sec: clamp(56px, 7vw, 104px);
   --pad-x: clamp(12px, 2.4vw, 28px);
-  --bar-h: 52px;
+  --bar-h: 53px;
 
   color-scheme: dark;
 }
@@ -141,7 +141,7 @@ code {
   left: 12px;
   font-size: 12px;
 }
-.box--focus > .box-title {
+.box--focus .box-title {
   color: var(--cyan);
   font-weight: 600;
 }
