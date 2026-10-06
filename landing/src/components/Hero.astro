@@ -43,25 +43,57 @@ const session: { text: string; tone?: string }[] = [
       <span class="box-meta">root@vps</span>
       <div class="session" data-session>
         {session.map((l) => <div class:list={['line', l.tone]}>{l.text}</div>)}
-        <div><span class="ps">$ </span><span class="cursor"></span></div>
+        <div data-prompt><span class="ps">$ </span><span class="cursor" data-cursor></span></div>
       </div>
     </div>
   </div>
 </section>
 
 <script is:inline>
-  // Type the session out line by line. Lines keep their space while hidden, so
-  // nothing below shifts; without JS or with reduced motion they're all shown.
+  // Replay the session like a terminal: commands are typed out, their output
+  // appears at once, and the cursor follows the last line. The box is pinned
+  // to its final height first so nothing below moves. Without JS or with
+  // reduced motion the finished session is shown as-is.
   (() => {
     const box = document.querySelector('[data-session]');
     if (!box || window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
     const lines = [...box.querySelectorAll('.line')];
-    lines.forEach((l) => l.classList.add('is-pending'));
+    const prompt = box.querySelector('[data-prompt]');
+    const cursor = box.querySelector('[data-cursor]');
+    const texts = lines.map((l) => l.textContent ?? '');
+
+    box.style.minHeight = `${box.offsetHeight}px`;
+    lines.forEach((l) => (l.hidden = true));
+    prompt.hidden = true;
+
+    const after = (ms, fn) => setTimeout(fn, ms);
     let i = 0;
-    const timer = setInterval(() => {
-      if (i >= lines.length) return clearInterval(timer);
-      lines[i++].classList.remove('is-pending');
-    }, 420);
+    const next = () => {
+      if (i >= lines.length) {
+        prompt.append(cursor);
+        prompt.hidden = false;
+        box.style.minHeight = '';
+        return;
+      }
+      const line = lines[i];
+      const text = texts[i++];
+      const out = document.createTextNode('');
+      line.replaceChildren(out, cursor);
+      line.hidden = false;
+      if (!text.startsWith('$ ')) {
+        out.data = text;
+        return after(140, next);
+      }
+      out.data = '$ ';
+      let c = 2;
+      const type = () => {
+        if (c >= text.length) return after(380, next);
+        out.data += text[c++];
+        after(22 + Math.random() * 30, type);
+      };
+      after(260, type);
+    };
+    after(400, next);
   })();
 </script>
 
@@ -149,9 +181,6 @@ const session: { text: string; tone?: string }[] = [
     font-size: 13px;
     white-space: pre-wrap;
     word-break: break-all;
-  }
-  .line.is-pending {
-    visibility: hidden;
   }
 
   .cursor {
