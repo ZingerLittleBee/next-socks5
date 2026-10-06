@@ -1,43 +1,76 @@
 ---
-import { REPO, SECTIONS } from '../consts';
+import { REPO, SECTIONS, VERSION } from '../consts';
 
 const installIdx = SECTIONS.findIndex((s) => s.id === 'install');
+
+// neofetch-style readout on the right of the hero panel.
+const info = [
+  ['Protocol', 'SOCKS5 · RFC 1928 + 1929'],
+  ['Commands', 'CONNECT, UDP ASSOCIATE'],
+  ['Auth', 'none | username/password'],
+  ['Egress', 'private ranges blocked'],
+  ['Targets', 'musl x86_64 · aarch64'],
+  ['UI', 'ratatui TUI · --no-tui'],
+  ['License', 'MIT'],
+];
+const swatches = ['var(--line2)', 'var(--red)', 'var(--yellow)', 'var(--cyan)', 'var(--dim)', 'var(--text)', 'var(--hi)'];
 ---
 
 <section id="overview" class="section">
   <div class="box box--double hero">
     <span class="box-title">README.md</span>
-    <div class="dim"># SOCKS5 server · RFC 1928 + RFC 1929 · written in Rust</div>
-    <h1>A SOCKS5 proxy that <span class="cy">shows its work.</span></h1>
-    <p class="lede">
-      This page is drawn the way the server's dashboard is: panels, keys, and a log you can read. A
-      hand-written protocol core with secure defaults, one-command install, and every connection on
-      screen.
-    </p>
-    <div class="keys">
-      <a class="key key--primary" href="#install" data-go={installIdx}><kbd>i</kbd>install</a>
-      <a class="key" href={REPO}><kbd>g</kbd>github</a>
-      <a class="key" href={`${REPO}/blob/main/README.md`}><kbd>d</kbd>docs</a>
+    <span class="box-meta">neofetch</span>
+
+    <div class="pitch">
+      <div class="dim"># SOCKS5 server written in Rust</div>
+      <h1>A SOCKS5 proxy that <span class="cy">shows its work.</span></h1>
+      <p class="lede">
+        A hand-written protocol core with secure defaults, a one-command installer, and a live
+        terminal dashboard that shows every connection.
+      </p>
+      <div class="keys">
+        <a class="key key--primary" href="#install" data-go={installIdx}><kbd>i</kbd>install</a>
+        <a class="key" href={REPO}><kbd>g</kbd>github</a>
+        <a class="key" href={`${REPO}/blob/main/README.md`}><kbd>d</kbd>docs</a>
+      </div>
+    </div>
+
+    <div class="fetch">
+      <div><span class="hi b">next-socks5</span><span class="dim">@</span><span class="hi b">v{VERSION}</span></div>
+      <div class="dim" aria-hidden="true">------------------</div>
+      <dl>
+        {
+          info.map(([k, v]) => (
+            <div class="row">
+              <dt>{k}</dt>
+              <dd>{v}</dd>
+            </div>
+          ))
+        }
+      </dl>
+      <div class="swatches" aria-hidden="true">
+        {swatches.map((c) => <i style={`background:${c}`} />)}
+      </div>
     </div>
   </div>
 </section>
 
 <style>
   .hero {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    width: 100%;
-    max-width: 980px;
-    margin-inline: auto;
-    padding: clamp(36px, 5vw, 64px) clamp(20px, 4vw, 48px);
-    text-align: center;
+    display: grid;
+    grid-template-columns: minmax(0, 7fr) minmax(0, 5fr);
+    padding: 0;
+  }
+
+  .pitch,
+  .fetch {
+    padding: clamp(28px, 3.4vw, 48px) clamp(22px, 3vw, 40px);
   }
 
   h1 {
     margin: 18px 0 0;
     color: var(--hi);
-    font-size: clamp(36px, 5.2vw, 72px);
+    font-size: clamp(36px, 5vw, 72px);
     font-weight: 800;
     line-height: 1.02;
     letter-spacing: -0.04em;
@@ -45,18 +78,17 @@ const installIdx = SECTIONS.findIndex((s) => s.id === 'install');
   }
 
   .lede {
-    max-width: 60ch;
-    margin: 24px 0 0;
+    max-width: 62ch;
+    margin: 22px 0 0;
     color: var(--text2);
-    text-wrap: balance;
+    text-wrap: pretty;
   }
 
   .keys {
     display: flex;
     flex-wrap: wrap;
-    justify-content: center;
     gap: 10px;
-    margin-top: 32px;
+    margin-top: 28px;
   }
   .key {
     display: inline-flex;
@@ -103,5 +135,55 @@ const installIdx = SECTIONS.findIndex((s) => s.id === 'install');
   .key--primary kbd {
     background: var(--on-cyan);
     color: var(--cyan);
+  }
+
+  .fetch {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 3px;
+    border-left: 1px solid var(--line2);
+    font-size: 13.5px;
+    white-space: nowrap;
+  }
+  .b {
+    font-weight: 700;
+  }
+  dl {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    margin: 0;
+  }
+  .row {
+    display: grid;
+    grid-template-columns: 10ch minmax(0, 1fr);
+  }
+  dt {
+    color: var(--cyan);
+    font-weight: 600;
+  }
+  dd {
+    margin: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .swatches {
+    display: flex;
+    margin-top: 14px;
+  }
+  .swatches i {
+    width: 26px;
+    height: 14px;
+  }
+
+  @media (max-width: 960px) {
+    .hero {
+      grid-template-columns: minmax(0, 1fr);
+    }
+    .fetch {
+      border-top: 1px solid var(--line2);
+      border-left: 0;
+    }
   }
 </style>
